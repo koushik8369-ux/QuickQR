@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { buildQrContent, validateForm } from './qrContent.js';
 import './App.css';
@@ -38,33 +38,142 @@ const INITIAL_SETTINGS = {
   background: '#ffffff',
 };
 
+const MATRIX_CHARACTERS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン<>[]{}#$%';
+
+function MatrixRain() {
+  const canvasRef = useRef(null);
+  const [motionAllowed, setMotionAllowed] = useState(
+    () => !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  );
+
+  useEffect(() => {
+    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updateMotionPreference = () => setMotionAllowed(!motionPreference.matches);
+    motionPreference.addEventListener('change', updateMotionPreference);
+    return () => motionPreference.removeEventListener('change', updateMotionPreference);
+  }, []);
+
+  useEffect(() => {
+    if (!motionAllowed) return undefined;
+
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext('2d');
+    const shell = canvas?.parentElement;
+    if (!canvas || !context || !shell) return undefined;
+
+    let columns = [];
+    let animationFrame = 0;
+    let lastFrameTime = 0;
+    let width = 0;
+    let height = 0;
+    const frameInterval = 1000 / 30;
+
+    const resizeCanvas = () => {
+      const bounds = shell.getBoundingClientRect();
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, window.innerWidth < 620 ? 1 : 1.5);
+      const mobile = window.innerWidth < 620;
+      const fontSize = mobile ? 13 : 15;
+      const columnGap = mobile ? 25 : 23;
+
+      width = bounds.width;
+      height = bounds.height;
+      canvas.width = Math.round(width * pixelRatio);
+      canvas.height = Math.round(height * pixelRatio);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.font = `${fontSize}px monospace`;
+      context.textBaseline = 'top';
+
+      const columnCount = Math.ceil(width / columnGap);
+      columns = Array.from({ length: columnCount }, (_, index) => ({
+        x: index * columnGap + Math.random() * 5,
+        y: Math.random() * height,
+        speed: (mobile ? 34 : 43) + Math.random() * (mobile ? 34 : 57),
+        tailLength: 4 + Math.floor(Math.random() * 7),
+        fontSize,
+      }));
+    };
+
+    const drawFrame = (time) => {
+      animationFrame = window.requestAnimationFrame(drawFrame);
+      if (time - lastFrameTime < frameInterval) return;
+
+      const elapsed = lastFrameTime ? Math.min((time - lastFrameTime) / 1000, 0.05) : 0;
+      lastFrameTime = time;
+      context.fillStyle = 'rgba(2, 10, 5, 0.16)';
+      context.fillRect(0, 0, width, height);
+
+      columns.forEach((column) => {
+        for (let tail = column.tailLength; tail >= 0; tail -= 1) {
+          const y = column.y - tail * column.fontSize;
+          if (y < -column.fontSize || y > height) continue;
+
+          const character = MATRIX_CHARACTERS[Math.floor(Math.random() * MATRIX_CHARACTERS.length)];
+          context.globalAlpha = tail === 0 ? 0.78 : 0.34 * (1 - tail / (column.tailLength + 1));
+          context.fillStyle = tail === 0 ? '#39FF14' : tail % 3 === 0 ? '#00C853' : '#00E676';
+          if (tail === 0) {
+            context.shadowColor = '#39FF14';
+            context.shadowBlur = 6;
+          }
+          context.fillText(character, column.x, y);
+          context.shadowBlur = 0;
+        }
+
+        column.y += column.speed * elapsed;
+        if (column.y - column.tailLength * column.fontSize > height) {
+          column.y = -Math.random() * height * 0.35;
+          column.speed = (window.innerWidth < 620 ? 34 : 43) + Math.random() * 65;
+        }
+      });
+
+      context.globalAlpha = 1;
+    };
+
+    resizeCanvas();
+    const resizeObserver = 'ResizeObserver' in window ? new ResizeObserver(resizeCanvas) : null;
+    resizeObserver?.observe(shell);
+    window.addEventListener('resize', resizeCanvas);
+    animationFrame = window.requestAnimationFrame(drawFrame);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener('resize', resizeCanvas);
+      resizeObserver?.disconnect();
+    };
+  }, [motionAllowed]);
+
+  if (!motionAllowed) return null;
+
+  return <canvas ref={canvasRef} className="matrix-rain" aria-hidden="true" />;
+}
+
 function Header() {
   return (
-    <header className="site-header">
-      <a className="brand" href="#home" aria-label="QuickQR home">
+    <header className="site-header reveal">
+      <a className="brand reveal" href="#home" aria-label="QuickQR home">
         <span className="brand-copy">
           <span className="brand-name">Quick<span className="brand-accent">QR</span></span>
           <span className="brand-tagline">Generate. Customize. Download.</span>
         </span>
       </a>
       <nav className="main-nav" aria-label="Main navigation">
-        <a className="nav-link active" href="#home">Home</a>
-        <a className="nav-link" href="#about">About</a>
+        <a className="nav-link active reveal" href="#home">Home</a>
+        <a className="nav-link reveal" href="#about">About</a>
       </nav>
-      <a className="header-action" href="#generator">Create a QR <span aria-hidden="true">↗</span></a>
+      <a className="header-action reveal" href="#generator">Create a QR <span aria-hidden="true">↗</span></a>
     </header>
   );
 }
 
 function TypeTabs({ selected, onSelect }) {
   return (
-    <div className="type-tabs" role="tablist" aria-label="QR code content type">
-      {QR_TYPES.map(({ id, label, icon }) => (
+    <div className="type-tabs reveal" role="tablist" aria-label="QR code content type">
+      {QR_TYPES.map(({ id, label, icon }, index) => (
         <button
-          className={`type-tab${selected === id ? ' selected' : ''}`}
+          className={`type-tab reveal${selected === id ? ' selected' : ''}`}
           id={`tab-${id}`}
           key={id}
           type="button"
+          style={{ '--reveal-delay': `${index * 45}ms` }}
           role="tab"
           aria-selected={selected === id}
           tabIndex={selected === id ? 0 : -1}
@@ -94,11 +203,11 @@ function TypeTabs({ selected, onSelect }) {
 function Field({ id, label, error, hint, as = 'input', className = '', ...props }) {
   const Control = as;
   return (
-    <div className={`field ${className}`}>
-      <label htmlFor={id}>{label}</label>
+    <div className={`field reveal ${className}`}>
+      <label className="reveal" htmlFor={id}>{label}</label>
       <Control
         id={id}
-        className={`form-control${error ? ' invalid' : ''}`}
+        className={`form-control reveal${error ? ' invalid' : ''}`}
         aria-invalid={Boolean(error)}
         aria-describedby={[hint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(' ') || undefined}
         {...props}
@@ -187,7 +296,7 @@ function FormFields({ type, values, onChange, errors, onBlur }) {
           maxLength: 64,
           hint: values.security === 'WPA' ? 'WPA passwords use 8–63 characters or 64 hexadecimal digits.' : 'WEP passwords use 5 or 13 characters, or 10 or 26 hexadecimal digits.',
         })}
-        <label className="checkbox-field">
+        <label className="checkbox-field reveal">
           <input type="checkbox" checked={values.hidden} onChange={(event) => onChange('hidden', event.target.checked)} />
           <span className="custom-checkbox" aria-hidden="true" />
           <span>Hidden network</span>
@@ -208,32 +317,32 @@ function FormFields({ type, values, onChange, errors, onBlur }) {
 
 function QrSettings({ settings, onChange }) {
   return (
-    <section className="settings-section" aria-labelledby="settings-title">
-      <div className="section-heading">
+    <section className="settings-section reveal" aria-labelledby="settings-title">
+      <div className="section-heading reveal">
         <h3 id="settings-title">Customize your QR</h3>
         <span className="heading-note">Make it yours</span>
       </div>
       <div className="settings-grid">
-        <div className="field">
-          <label htmlFor="qr-size">Image size</label>
-          <select className="form-control" id="qr-size" value={settings.size} onChange={(event) => onChange('size', Number(event.target.value))}>
+        <div className="field reveal">
+          <label className="reveal" htmlFor="qr-size">Image size</label>
+          <select className="form-control reveal" id="qr-size" value={settings.size} onChange={(event) => onChange('size', Number(event.target.value))}>
             {[128, 256, 320, 512, 1024].map((size) => <option value={size} key={size}>{size} × {size} px</option>)}
           </select>
         </div>
         <ColorPicker id="qr-foreground" label="QR color" value={settings.foreground} onChange={(value) => onChange('foreground', value)} />
         <ColorPicker id="qr-background" label="Background" value={settings.background} onChange={(value) => onChange('background', value)} />
       </div>
-      <p className="settings-hint">High contrast helps your QR scan on more devices.</p>
+      <p className="settings-hint reveal">High contrast helps your QR scan on more devices.</p>
     </section>
   );
 }
 
 function ColorPicker({ id, label, value, onChange }) {
   return (
-    <div className="field color-field">
-      <label htmlFor={id}>{label}</label>
-      <div className="color-control">
-        <input id={id} type="color" value={value} onChange={(event) => onChange(event.target.value)} aria-label={`${label} color`} />
+    <div className="field color-field reveal">
+      <label className="reveal" htmlFor={id}>{label}</label>
+      <div className="color-control reveal">
+        <input className="reveal" id={id} type="color" value={value} onChange={(event) => onChange(event.target.value)} aria-label={`${label} color`} />
         <span>{value.toUpperCase()}</span>
       </div>
     </div>
@@ -242,8 +351,8 @@ function ColorPicker({ id, label, value, onChange }) {
 
 function PreviewCard({ qr, error, onClear }) {
   return (
-    <section className="preview-card" aria-labelledby="preview-title">
-      <div className="preview-heading">
+    <section className="preview-card reveal" aria-labelledby="preview-title">
+      <div className="preview-heading reveal">
         <div>
           <p className="eyebrow">YOUR PREVIEW</p>
           <h2 id="preview-title">See it come to life</h2>
@@ -252,11 +361,11 @@ function PreviewCard({ qr, error, onClear }) {
           <span className="status-dot" />{qr ? 'Ready to scan' : 'Live preview'}
         </span>
       </div>
-      <div className={`qr-stage${qr ? ' has-qr' : ''}`}>
+      <div className={`qr-stage reveal${qr ? ' has-qr' : ''}`}>
         {qr ? (
-          <img className="qr-image" src={qr} alt="Generated QR code preview" />
+          <img key={qr} className="qr-image reveal" src={qr} alt="Generated QR code preview" />
         ) : (
-          <div className="empty-preview">
+          <div className="empty-preview reveal">
             <div className="qr-placeholder" aria-hidden="true">
               <span className="finder finder-top-left" /><span className="finder finder-top-right" />
               <span className="finder finder-bottom-left" /><span className="placeholder-core" />
@@ -266,14 +375,14 @@ function PreviewCard({ qr, error, onClear }) {
           </div>
         )}
       </div>
-      <div className="preview-caption">
+      <div className="preview-caption reveal">
         <span className="caption-icon" aria-hidden="true">⌁</span>
         <span>Generated privately in your browser. Your data never leaves this device.</span>
       </div>
       {error && <p className="generation-error" role="alert">{error}</p>}
-      <div className="preview-actions">
-        {qr && <a className="button button-download" href={qr} download="quickqr.png"><span aria-hidden="true">↓</span> Download PNG</a>}
-        <button className="button button-quiet" type="button" onClick={onClear}>Clear</button>
+      <div className="preview-actions reveal">
+        {qr && <a className="button button-download reveal" href={qr} download="quickqr.png"><span aria-hidden="true">↓</span> Download PNG</a>}
+        <button className="button button-quiet reveal" type="button" onClick={onClear}>Clear</button>
       </div>
     </section>
   );
@@ -281,9 +390,9 @@ function PreviewCard({ qr, error, onClear }) {
 
 function About() {
   return (
-    <section id="about" className="about-section">
-      <span className="about-icon" aria-hidden="true">⌘</span>
-      <div>
+    <section id="about" className="about-section reveal">
+      <span className="about-icon reveal" aria-hidden="true">⌘</span>
+      <div className="reveal">
         <h2>Simple, private, yours.</h2>
         <p>QuickQR creates useful, high-quality QR codes right in your browser. Nothing is uploaded or stored on a server.</p>
       </div>
@@ -301,6 +410,34 @@ function App() {
   const [qr, setQr] = useState('');
   const [generationError, setGenerationError] = useState('');
   const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.add('reveal-ready');
+    return () => document.documentElement.classList.remove('reveal-ready');
+  }, []);
+
+  useEffect(() => {
+    const elements = document.querySelectorAll('.reveal:not(.is-visible)');
+    if (!('IntersectionObserver' in window)) {
+      elements.forEach((element) => element.classList.add('is-visible'));
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.08, rootMargin: '0px 0px -24px 0px' });
+
+    elements.forEach((element) => observer.observe(element));
+    return () => {
+      observer.disconnect();
+      observer.disconnect();
+    };
+  }, [type, qr, generationError, submitted]);
 
   const validation = useMemo(() => validateForm(type, values), [type, values]);
   const visibleErrors = useMemo(() => Object.fromEntries(
@@ -366,65 +503,70 @@ function App() {
 
   return (
     <div id="home" className="app-shell">
-      <Header />
-      <main>
-        <section className="hero" aria-labelledby="hero-title">
-          <div className="hero-kicker"><span className="kicker-spark">✳</span> YOUR IDEAS, IN A SCAN</div>
-          <h1 id="hero-title">Generate Your<br /><span>QR Code</span></h1>
-          <p className="hero-copy">Create a QR code for text, links, contact details, and more — right in your browser.</p>
-        </section>
+      <MatrixRain />
+      <div className="app-content">
+        <Header />
+        <main>
+          <section className="hero" aria-labelledby="hero-title">
+            <div className="hero-kicker reveal"><span className="kicker-spark">✳</span> YOUR IDEAS, IN A SCAN</div>
+            <h1 id="hero-title" className="reveal">Generate Your<br /><span>QR Code</span></h1>
+            <p className="hero-copy reveal">Create a QR code for text, links, contact details, and more — right in your browser.</p>
+          </section>
 
-        <section className="workspace" id="generator" aria-label="QR code generator">
-          <div className="generator-card">
-            <div className="card-title-row">
-              <div>
-                <p className="eyebrow">GET STARTED</p>
-                <h2>What would you like to share?</h2>
+          <section className="workspace reveal" id="generator" aria-label="QR code generator">
+            <div className="generator-card reveal">
+              <div className="card-title-row reveal">
+                <div>
+                  <p className="eyebrow">GET STARTED</p>
+                  <h2>What would you like to share?</h2>
+                </div>
+                <span className="step-indicator"><span>01</span> / 02</span>
               </div>
-              <span className="step-indicator"><span>01</span> / 02</span>
+              <TypeTabs selected={type} onSelect={(nextType) => { setType(nextType); setSubmitted(false); setTouched({}); }} />
+              <form
+                id="qr-form"
+                key={type}
+                className="qr-form reveal"
+                role="tabpanel"
+                aria-labelledby={`tab-${type}`}
+                onSubmit={(event) => { event.preventDefault(); handleGenerate(); }}
+                noValidate
+              >
+                <div className="fields-grid">
+                  <FormFields
+                    type={type}
+                    values={values}
+                    onChange={updateValue}
+                    errors={visibleErrors}
+                    onBlur={(name) => setTouched((current) => ({ ...current, [name]: true }))}
+                  />
+                </div>
+                <QrSettings settings={settings} onChange={updateSetting} />
+                <div className="form-footer reveal">
+                  <p className="reveal"><span className="privacy-lock" aria-hidden="true">◈</span> No sign-up. No tracking. Just QR.</p>
+                  <button className="button button-primary reveal" type="submit" disabled={generating}>
+                    {generating ? 'Generating…' : 'Generate QR'} <span aria-hidden="true">↗</span>
+                  </button>
+                </div>
+                {submitted && Object.keys(validation.errors).length > 0 && (
+                  <p className="form-notice reveal" role="alert">Check the highlighted field{Object.keys(validation.errors).length === 1 ? '' : 's'} and try again.</p>
+                )}
+              </form>
             </div>
-            <TypeTabs selected={type} onSelect={(nextType) => { setType(nextType); setSubmitted(false); setTouched({}); }} />
-            <form
-              id="qr-form"
-              role="tabpanel"
-              aria-labelledby={`tab-${type}`}
-              onSubmit={(event) => { event.preventDefault(); handleGenerate(); }}
-              noValidate
-            >
-              <div className="fields-grid">
-                <FormFields
-                  type={type}
-                  values={values}
-                  onChange={updateValue}
-                  errors={visibleErrors}
-                  onBlur={(name) => setTouched((current) => ({ ...current, [name]: true }))}
-                />
-              </div>
-              <QrSettings settings={settings} onChange={updateSetting} />
-              <div className="form-footer">
-                <p><span className="privacy-lock" aria-hidden="true">◈</span> No sign-up. No tracking. Just QR.</p>
-                <button className="button button-primary" type="submit" disabled={generating}>
-                  {generating ? 'Generating…' : 'Generate QR'} <span aria-hidden="true">↗</span>
-                </button>
-              </div>
-              {submitted && Object.keys(validation.errors).length > 0 && (
-                <p className="form-notice" role="alert">Check the highlighted field{Object.keys(validation.errors).length === 1 ? '' : 's'} and try again.</p>
-              )}
-            </form>
-          </div>
-          <PreviewCard
-            qr={qr}
-            error={generationError}
-            onClear={handleClear}
-          />
-        </section>
-        <About />
-      </main>
-      <footer className="site-footer">
-        <a className="brand footer-brand" href="#home"><span className="brand-name">Quick<span className="brand-accent">QR</span></span></a>
-        <span>Made for sharing. Built for privacy.</span>
-        <a href="#home">Back to top ↑</a>
-      </footer>
+            <PreviewCard
+              qr={qr}
+              error={generationError}
+              onClear={handleClear}
+            />
+          </section>
+          <About />
+        </main>
+        <footer className="site-footer reveal">
+          <a className="brand footer-brand reveal" href="#home"><span className="brand-name">Quick<span className="brand-accent">QR</span></span></a>
+          <span className="reveal">Made for sharing. Built for privacy.</span>
+          <a className="reveal" href="#home">Back to top ↑</a>
+        </footer>
+      </div>
     </div>
   );
 }
