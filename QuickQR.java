@@ -9,11 +9,16 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
 import java.awt.Color;
 import java.awt.Desktop;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
@@ -24,14 +29,24 @@ import java.util.stream.Stream;
 
 public class QuickQR {
 
+    private static final Path HISTORY_FILE = Path.of("qr-history.csv");
+    private static final String HISTORY_HEADER =
+            "Serial Number,Generated Filename,Original Message,Generation Date and Time,QR Image Size";
+    private static final DateTimeFormatter HISTORY_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final List<HistoryEntry> generationHistory = new ArrayList<>();
+    private static long nextHistorySerialNumber = 1;
+    private static boolean historyWritable = true;
+
     public static void main(String[] args) {
+        loadGenerationHistory();
         displayWelcomeScreen();
 
         try (Scanner scanner = new Scanner(System.in, StandardCharsets.UTF_8)) {
             boolean running = true;
             while (running) {
                 displayMenu();
-                System.out.print("Select an option (1-3): ");
+                System.out.print("Select an option (1-4): ");
 
                 if (!scanner.hasNextLine()) {
                     System.out.println("\nInput ended. Exiting QuickQR.");
@@ -42,11 +57,12 @@ public class QuickQR {
                 switch (choice) {
                     case "1" -> generateQrCode(scanner);
                     case "2" -> viewGeneratedQrCodes(scanner);
-                    case "3" -> {
+                    case "3" -> viewGenerationHistory();
+                    case "4" -> {
                         System.out.println("Thank you for using QuickQR. Goodbye!");
                         running = false;
                     }
-                    default -> System.out.println("Invalid option. Please enter 1, 2, or 3.");
+                    default -> System.out.println("Invalid option. Please enter 1, 2, 3, or 4.");
                 }
             }
         }
@@ -63,7 +79,8 @@ public class QuickQR {
         System.out.println();
         System.out.println("1. Generate QR Code");
         System.out.println("2. View Generated QR Codes");
-        System.out.println("3. Exit");
+        System.out.println("3. View QR Generation History");
+        System.out.println("4. Exit");
     }
 
     private static void generateQrCode(Scanner scanner) {
@@ -207,6 +224,7 @@ public class QuickQR {
             MatrixToImageWriter.writeToPath(qrCode, "PNG", outputFile, imageConfig);
             System.out.println("QR code generated successfully: "
                     + outputFile.toAbsolutePath().normalize());
+            recordGeneration(fileName, message, imageSize);
         } catch (InvalidPathException exception) {
             System.out.println("Invalid filename: " + exception.getMessage());
         } catch (WriterException exception) {
@@ -219,6 +237,197 @@ public class QuickQR {
         } catch (IllegalArgumentException exception) {
             System.out.println("Invalid QR code input: " + exception.getMessage());
         }
+    }
+
+    private static void loadGenerationHistory() {
+        try {
+            if (!Files.exists(HISTORY_FILE) || Files.size(HISTORY_FILE) == 0) {
+                return;
+            }
+
+            List<List<String>> rows = parseCsv(Files.readString(HISTORY_FILE, StandardCharsets.UTF_8));
+            if (rows.isEmpty() || !rows.get(0).equals(List.of(
+                    "Serial Number", "Generated Filename", "Original Message",
+                    "Generation Date and Time", "QR Image Size"))) {
+                throw new IOException("The history file has an invalid header.");
+            }
+
+            for (int index = 1; index < rows.size(); index++) {
+                List<String> row = rows.get(index);
+                try {
+                    if (row.size() != 5) {
+                        throw new IllegalArgumentException("Expected 5 columns.");
+                    }
+                    long serialNumber = Long.parseLong(row.get(0));
+                    int imageSize = Integer.parseInt(row.get(4));
+                    if (serialNumber < 1 || imageSize < 1) {
+                        throw new IllegalArgumentException("Serial number and image size must be positive.");
+                    }
+
+                    generationHistory.add(new HistoryEntry(
+                            serialNumber, row.get(1), row.get(2), row.get(3), imageSize));
+                    nextHistorySerialNumber = Math.max(nextHistorySerialNumber, serialNumber + 1);
+                } catch (IllegalArgumentException exception) {
+                    System.out.println("Skipping invalid QR history entry " + index + ": "
+                            + exception.getMessage());
+                }
+            }
+        } catch (IOException | SecurityException exception) {
+            historyWritable = false;
+            System.out.println("Unable to load QR generation history: " + exception.getMessage());
+        }
+    }
+
+    private static List<List<String>> parseCsv(String csv) throws IOException {
+        List<List<String>> rows = new ArrayList<>();
+        List<String> row = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean inQuotes = false;
+        boolean afterQuote = false;
+        boolean recordStarted = false;
+
+        for (int index = 0; index < csv.length(); index++) {
+            char character = csv.charAt(index);
+            if (inQuotes) {
+                if (character == '"') {
+                    if (index + 1 < csv.length() && csv.charAt(index + 1) == '"') {
+                        field.append('"');
+                        index++;
+                    } else {
+                        inQuotes = false;
+                        afterQuote = true;
+                    }
+                } else {
+                    field.append(character);
+                }
+                continue;
+            }
+
+            if (afterQuote) {
+                if (character == ',') {
+                    row.add(field.toString());
+                    field.setLength(0);
+                    afterQuote = false;
+                    recordStarted = true;
+                } else if (character == '\n' || character == '\r') {
+                    row.add(field.toString());
+                    rows.add(row);
+                    row = new ArrayList<>();
+                    field.setLength(0);
+                    afterQuote = false;
+                    recordStarted = false;
+                    if (character == '\r' && index + 1 < csv.length()
+                            && csv.charAt(index + 1) == '\n') {
+                        index++;
+                    }
+                } else {
+                    throw new IOException("Unexpected character after a quoted CSV field.");
+                }
+                continue;
+            }
+
+            if (character == '"') {
+                if (field.length() != 0) {
+                    throw new IOException("Unexpected quote in an unquoted CSV field.");
+                }
+                inQuotes = true;
+                recordStarted = true;
+            } else if (character == ',') {
+                row.add(field.toString());
+                field.setLength(0);
+                recordStarted = true;
+            } else if (character == '\n' || character == '\r') {
+                row.add(field.toString());
+                rows.add(row);
+                row = new ArrayList<>();
+                field.setLength(0);
+                recordStarted = false;
+                if (character == '\r' && index + 1 < csv.length()
+                        && csv.charAt(index + 1) == '\n') {
+                    index++;
+                }
+            } else {
+                field.append(character);
+                recordStarted = true;
+            }
+        }
+
+        if (inQuotes) {
+            throw new IOException("The history file ends inside a quoted CSV field.");
+        }
+        if (recordStarted || afterQuote || !row.isEmpty() || field.length() > 0) {
+            row.add(field.toString());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private static void recordGeneration(String fileName, String message, int imageSize) {
+        if (!historyWritable) {
+            System.out.println("QR code was generated, but history is unavailable because its file could not be loaded.");
+            return;
+        }
+
+        HistoryEntry entry = new HistoryEntry(nextHistorySerialNumber, fileName, message,
+                LocalDateTime.now().format(HISTORY_TIME_FORMAT), imageSize);
+        try {
+            boolean writeHeader = !Files.exists(HISTORY_FILE) || Files.size(HISTORY_FILE) == 0;
+            try (BufferedWriter writer = Files.newBufferedWriter(
+                    HISTORY_FILE, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE, StandardOpenOption.APPEND)) {
+                if (writeHeader) {
+                    writer.write(HISTORY_HEADER);
+                    writer.newLine();
+                }
+                writer.write(toCsvRow(entry));
+                writer.newLine();
+            }
+            generationHistory.add(entry);
+            nextHistorySerialNumber++;
+        } catch (IOException | SecurityException exception) {
+            System.out.println("QR code was generated, but its history could not be saved: "
+                    + exception.getMessage());
+        }
+    }
+
+    private static String toCsvRow(HistoryEntry entry) {
+        return entry.serialNumber() + ","
+                + csvField(entry.fileName()) + ","
+                + csvField(entry.message()) + ","
+                + csvField(entry.generationTime()) + ","
+                + entry.imageSize();
+    }
+
+    private static String csvField(String value) {
+        if (value.indexOf(',') < 0 && value.indexOf('"') < 0
+                && value.indexOf('\n') < 0 && value.indexOf('\r') < 0) {
+            return value;
+        }
+        return "\"" + value.replace("\"", "\"\"") + "\"";
+    }
+
+    private static void viewGenerationHistory() {
+        if (generationHistory.isEmpty()) {
+            System.out.println("No QR generation history found.");
+            return;
+        }
+
+        System.out.println("QR generation history:");
+        System.out.printf("%-8s | %-24s | %-19s | %-10s | %s%n",
+                "Serial", "Filename", "Generated at", "Size", "Message");
+        System.out.println("---------+--------------------------+---------------------+------------+--------");
+        for (HistoryEntry entry : generationHistory) {
+            String readableMessage = entry.message()
+                    .replace("\r", "\\r")
+                    .replace("\n", "\\n");
+            System.out.printf("%-8d | %-24s | %-19s | %-10s | %s%n",
+                    entry.serialNumber(), entry.fileName(), entry.generationTime(),
+                    entry.imageSize() + " x " + entry.imageSize(), readableMessage);
+        }
+    }
+
+    private record HistoryEntry(long serialNumber, String fileName, String message,
+                                String generationTime, int imageSize) {
     }
 
     private static String promptSelection(Scanner scanner, String prompt,
