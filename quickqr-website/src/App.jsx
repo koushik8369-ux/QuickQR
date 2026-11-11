@@ -357,7 +357,7 @@ function ColorPicker({ id, label, value, onChange }) {
   );
 }
 
-function PreviewCard({ qr, error, onClear }) {
+function PreviewCard({ qr, svgUrl, error, svgError, onClear }) {
   return (
     <section className="preview-card reveal" aria-labelledby="preview-title">
       <div className="preview-heading reveal">
@@ -388,8 +388,10 @@ function PreviewCard({ qr, error, onClear }) {
         <span>Generated privately in your browser. Your data never leaves this device.</span>
       </div>
       {error && <p className="generation-error" role="alert">{error}</p>}
+      {svgError && <p className="generation-error" role="alert">{svgError}</p>}
       <div className="preview-actions reveal">
         {qr && <a className="button button-download reveal" href={qr} download="quickqr.png"><span aria-hidden="true">↓</span> Download PNG</a>}
+        {svgUrl && <a className="button button-download reveal" href={svgUrl} download="quickqr.svg"><span aria-hidden="true">↓</span> Download SVG</a>}
         <button className="button button-quiet reveal" type="button" onClick={onClear}>Clear</button>
       </div>
     </section>
@@ -467,13 +469,20 @@ function App() {
   const [submitted, setSubmitted] = useState(false);
   const [generationRequest, setGenerationRequest] = useState(0);
   const [qr, setQr] = useState('');
+  const [svgUrl, setSvgUrl] = useState('');
   const [generationError, setGenerationError] = useState('');
+  const [svgError, setSvgError] = useState('');
   const [generating, setGenerating] = useState(false);
   const [initialHistory] = useState(readQrHistory);
   const [history, setHistory] = useState(initialHistory.entries);
   const [historyStorageError, setHistoryStorageError] = useState(initialHistory.error);
   const historyRef = useRef(initialHistory.entries);
   const explicitGenerationRef = useRef(null);
+
+  useEffect(() => {
+    if (!svgUrl) return undefined;
+    return () => URL.revokeObjectURL(svgUrl);
+  }, [svgUrl]);
 
   useEffect(() => {
     document.documentElement.classList.add('reveal-ready');
@@ -514,7 +523,9 @@ function App() {
       ? explicitGenerationRef.current
       : null;
     setQr('');
+    setSvgUrl('');
     setGenerationError('');
+    setSvgError('');
     if (!validation.valid) {
       setGenerating(false);
       return () => { active = false; };
@@ -531,12 +542,13 @@ function App() {
       }
       setGenerating(true);
       try {
-        const dataUrl = await QRCode.toDataURL(content, {
+        const options = {
           width: settings.size,
           margin: 2,
           errorCorrectionLevel: 'M',
           color: { dark: settings.foreground, light: settings.background },
-        });
+        };
+        const dataUrl = await QRCode.toDataURL(content, options);
         if (active) {
           setQr(dataUrl);
           if (explicitGeneration) {
@@ -556,6 +568,15 @@ function App() {
             }
             explicitGenerationRef.current = null;
           }
+        }
+        try {
+          const svgMarkup = await QRCode.toString(content, { ...options, type: 'svg' });
+          if (active) {
+            const svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
+            setSvgUrl(URL.createObjectURL(svgBlob));
+          }
+        } catch {
+          if (active) setSvgError('The SVG version could not be created. You can still download the PNG.');
         }
       } catch {
         if (active) {
@@ -592,7 +613,9 @@ function App() {
     setTouched({});
     setSubmitted(false);
     setQr('');
+    setSvgUrl('');
     setGenerationError('');
+    setSvgError('');
     setGenerating(false);
     setGenerationRequest((request) => request + 1);
   };
@@ -680,7 +703,9 @@ function App() {
             </div>
             <PreviewCard
               qr={qr}
+              svgUrl={svgUrl}
               error={generationError}
+              svgError={svgError}
               onClear={handleClear}
             />
           </section>

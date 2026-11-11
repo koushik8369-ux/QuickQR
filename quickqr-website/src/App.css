@@ -922,6 +922,10 @@ select.form-control {
   flex: 1 1 125px;
 }
 
+.preview-actions .button-download {
+  flex: 1 1 120px;
+}
+
 .button-download {
   border-color: rgba(0, 255, 102, 0.35);
   background: rgba(0, 255, 102, 0.08);
@@ -1462,6 +1466,12 @@ select.form-control {
   .history-entry-actions .button {
     min-height: 32px;
     padding: 0 8px;
+    font-size: 10px;
+  }
+
+  .preview-actions .button-download {
+    flex: 1 1 115px;
+    padding: 0 10px;
     font-size: 10px;
   }
 

@@ -78,12 +78,26 @@ test('creates a mailto QR with correctly encoded optional content', () => {
   );
 });
 
-test('generates browser-compatible PNG data URLs and rejects payloads beyond QR capacity', async () => {
+test('generates browser-compatible PNG and SVG downloads using the selected size and colors', async () => {
+  const options = {
+    width: 512,
+    margin: 2,
+    errorCorrectionLevel: 'M',
+    color: { dark: '#123456', light: '#fedcba' },
+  };
   const png = await QRCode.toDataURL('WIFI:T:WPA;S:Office;P:correcthorsebattery;;', {
-    width: 256,
-    color: { dark: '#07130b', light: '#ffffff' },
+    ...options,
   });
   assert.match(png, /^data:image\/png;base64,/);
+  const svg = await QRCode.toString('WIFI:T:WPA;S:Office;P:correcthorsebattery;;', {
+    ...options,
+    type: 'svg',
+  });
+  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  assert.match(svg, /width="512" height="512"/);
+  assert.match(svg, /<path fill="#fedcba"/);
+  assert.match(svg, /<path stroke="#123456"/);
+  assert.match(svg, /<\/svg>\s*$/);
   await assert.rejects(QRCode.toDataURL('x'.repeat(10000)));
 });
 
