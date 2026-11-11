@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { buildQrContent, validateForm } from './qrContent.js';
+import {
+  addQrHistoryEntry,
+  createQrHistoryEntry,
+  getQrHistoryEntry,
+  readQrHistory,
+  removeQrHistoryEntry,
+  writeQrHistory,
+} from './qrHistory.js';
 import './App.css';
 
 const QR_TYPES = [
@@ -388,6 +396,57 @@ function PreviewCard({ qr, error, onClear }) {
   );
 }
 
+function HistoryCard({ entries, error, onRestore, onDelete, onClearAll }) {
+  return (
+    <section className="history-card reveal" aria-labelledby="history-title">
+      <div className="history-heading">
+        <div>
+          <p className="eyebrow">ON THIS DEVICE</p>
+          <h2 id="history-title">Generation history</h2>
+        </div>
+        {entries.length > 0 && (
+          <button className="button button-quiet history-clear" type="button" onClick={onClearAll}>
+            Clear all history
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="history-notice" role="status">
+          History storage is unavailable or contains invalid data. You can still use the generator for this session.
+        </p>
+      )}
+      <p className="history-privacy">Wi-Fi QR codes are not saved because they may contain passwords.</p>
+      {entries.length ? (
+        <ol className="history-list">
+          {entries.map((entry) => (
+            <li className="history-entry" key={entry.id}>
+              <div className="history-entry-info">
+                <strong>{QR_TYPES.find((type) => type.id === entry.type)?.label ?? entry.type}</strong>
+                <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
+              </div>
+              <div className="history-entry-actions">
+                <button className="button button-download" type="button" onClick={() => onRestore(entry.id)}>
+                  Restore
+                </button>
+                <button
+                  className="button button-quiet"
+                  type="button"
+                  aria-label={`Delete ${entry.type} QR from history`}
+                  onClick={() => onDelete(entry.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="history-empty">Your generated QR codes will appear here after you choose Generate QR.</p>
+      )}
+    </section>
+  );
+}
+
 function About() {
   return (
     <section id="about" className="about-section reveal">
@@ -410,6 +469,11 @@ function App() {
   const [qr, setQr] = useState('');
   const [generationError, setGenerationError] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [initialHistory] = useState(readQrHistory);
+  const [history, setHistory] = useState(initialHistory.entries);
+  const [historyStorageError, setHistoryStorageError] = useState(initialHistory.error);
+  const historyRef = useRef(initialHistory.entries);
+  const explicitGenerationRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.classList.add('reveal-ready');
@@ -437,7 +501,7 @@ function App() {
       observer.disconnect();
       observer.disconnect();
     };
-  }, [type, qr, generationError, submitted]);
+  }, [type, qr, generationError, submitted, history]);
 
   const validation = useMemo(() => validateForm(type, values), [type, values]);
   const visibleErrors = useMemo(() => Object.fromEntries(
@@ -446,6 +510,9 @@ function App() {
 
   useEffect(() => {
     let active = true;
+    const explicitGeneration = explicitGenerationRef.current?.requestId === generationRequest
+      ? explicitGenerationRef.current
+      : null;
     setQr('');
     setGenerationError('');
     if (!validation.valid) {
@@ -459,6 +526,7 @@ function App() {
       if (settings.foreground === settings.background || contrastRatio(settings.foreground, settings.background) < 3) {
         setGenerationError('Choose colors with at least 3:1 contrast for a reliably scannable QR code.');
         setGenerating(false);
+        if (explicitGeneration) explicitGenerationRef.current = null;
         return;
       }
       setGenerating(true);
@@ -469,9 +537,31 @@ function App() {
           errorCorrectionLevel: 'M',
           color: { dark: settings.foreground, light: settings.background },
         });
-        if (active) setQr(dataUrl);
+        if (active) {
+          setQr(dataUrl);
+          if (explicitGeneration) {
+            if (type !== 'wifi') {
+              const entry = createQrHistoryEntry({
+                type,
+                values,
+                payload: content,
+                settings,
+              });
+              if (entry) {
+                const nextHistory = addQrHistoryEntry(historyRef.current, entry);
+                historyRef.current = nextHistory;
+                setHistory(nextHistory);
+                setHistoryStorageError(!writeQrHistory(nextHistory));
+              }
+            }
+            explicitGenerationRef.current = null;
+          }
+        }
       } catch {
-        if (active) setGenerationError('This content is too long or cannot be encoded as a QR code. Try shortening it.');
+        if (active) {
+          setGenerationError('This content is too long or cannot be encoded as a QR code. Try shortening it.');
+          if (explicitGeneration) explicitGenerationRef.current = null;
+        }
       } finally {
         if (active) setGenerating(false);
       }
@@ -479,6 +569,7 @@ function App() {
 
     return () => {
       active = false;
+      if (explicitGenerationRef.current === explicitGeneration) explicitGenerationRef.current = null;
       window.clearTimeout(timer);
     };
   }, [type, values, settings, generationRequest, validation.valid]);
@@ -488,10 +579,15 @@ function App() {
 
   const handleGenerate = () => {
     setSubmitted(true);
-    if (validation.valid) setGenerationRequest((request) => request + 1);
+    if (validation.valid) {
+      const requestId = generationRequest + 1;
+      explicitGenerationRef.current = { requestId };
+      setGenerationRequest(requestId);
+    }
   };
 
   const handleClear = () => {
+    explicitGenerationRef.current = null;
     setValues(INITIAL_VALUES);
     setTouched({});
     setSubmitted(false);
@@ -499,6 +595,35 @@ function App() {
     setGenerationError('');
     setGenerating(false);
     setGenerationRequest((request) => request + 1);
+  };
+
+  const saveHistoryChanges = (nextHistory) => {
+    historyRef.current = nextHistory;
+    setHistory(nextHistory);
+    setHistoryStorageError(!writeQrHistory(nextHistory));
+  };
+
+  const handleRestore = (id) => {
+    const entry = getQrHistoryEntry(historyRef.current, id);
+    if (!entry) return;
+    explicitGenerationRef.current = null;
+    setType(entry.type);
+    setValues({ ...INITIAL_VALUES, ...entry.values });
+    setSettings(entry.settings);
+    setTouched({});
+    setSubmitted(false);
+    setGenerationError('');
+    setGenerationRequest((request) => request + 1);
+  };
+
+  const handleDeleteHistoryEntry = (id) => {
+    saveHistoryChanges(removeQrHistoryEntry(historyRef.current, id));
+  };
+
+  const handleClearHistory = () => {
+    if (window.confirm('Clear all saved QR history? This cannot be undone.')) {
+      saveHistoryChanges([]);
+    }
   };
 
   return (
@@ -559,6 +684,13 @@ function App() {
               onClear={handleClear}
             />
           </section>
+          <HistoryCard
+            entries={history}
+            error={historyStorageError}
+            onRestore={handleRestore}
+            onDelete={handleDeleteHistoryEntry}
+            onClearAll={handleClearHistory}
+          />
           <About />
         </main>
         <footer className="site-footer reveal">

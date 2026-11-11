@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import QRCode from 'qrcode';
 import { buildQrContent, validateForm } from './qrContent.js';
+import {
+  addQrHistoryEntry,
+  createQrHistoryEntry,
+  getQrHistoryEntry,
+  MAX_QR_HISTORY_ENTRIES,
+  QR_HISTORY_STORAGE_KEY,
+  readQrHistory,
+  removeQrHistoryEntry,
+  writeQrHistory,
+} from './qrHistory.js';
 
 const blank = {
   text: '',
@@ -75,4 +85,85 @@ test('generates browser-compatible PNG data URLs and rejects payloads beyond QR 
   });
   assert.match(png, /^data:image\/png;base64,/);
   await assert.rejects(QRCode.toDataURL('x'.repeat(10000)));
+});
+
+function memoryStorage(initialValue = null) {
+  let value = initialValue;
+  return {
+    getItem(key) {
+      assert.equal(key, QR_HISTORY_STORAGE_KEY);
+      return value;
+    },
+    setItem(key, nextValue) {
+      assert.equal(key, QR_HISTORY_STORAGE_KEY);
+      value = nextValue;
+    },
+  };
+}
+
+function sampleHistoryEntry(id, overrides = {}) {
+  return {
+    id,
+    type: 'text',
+    values: { ...blank, text: `QR ${id}` },
+    payload: `QR ${id}`,
+    settings: { size: 320, foreground: '#07130b', background: '#ffffff' },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+test('stores, reloads, restores, deletes, and clears QR history', () => {
+  const storage = memoryStorage();
+  const first = sampleHistoryEntry('first');
+  const second = sampleHistoryEntry('second', { type: 'website' });
+
+  assert.equal(writeQrHistory([second, first], storage), true);
+  const reloaded = readQrHistory(storage);
+  assert.equal(reloaded.error, false);
+  assert.deepEqual(reloaded.entries, [second, first]);
+  assert.deepEqual(getQrHistoryEntry(reloaded.entries, 'first'), first);
+
+  const afterDelete = removeQrHistoryEntry(reloaded.entries, 'second');
+  assert.deepEqual(afterDelete, [first]);
+  assert.equal(writeQrHistory(afterDelete, storage), true);
+  assert.deepEqual(readQrHistory(storage).entries, [first]);
+
+  assert.equal(writeQrHistory([], storage), true);
+  assert.deepEqual(readQrHistory(storage).entries, []);
+});
+
+test('keeps only the latest 20 entries and excludes Wi-Fi entries and credentials', () => {
+  const entries = Array.from({ length: MAX_QR_HISTORY_ENTRIES + 2 }, (_, index) => sampleHistoryEntry(String(index)));
+  const limited = entries.reduce((current, entry) => addQrHistoryEntry(current, entry), []);
+  assert.equal(limited.length, MAX_QR_HISTORY_ENTRIES);
+  assert.equal(limited[0].id, '21');
+  assert.equal(limited.at(-1).id, '2');
+
+  assert.equal(createQrHistoryEntry({
+    type: 'wifi',
+    values: { ...blank, ssid: 'Private network', password: 'secret-password' },
+    payload: 'WIFI:T:WPA;S:Private network;P:secret-password;;',
+    settings: { size: 320, foreground: '#07130b', background: '#ffffff' },
+  }), null);
+
+  const entry = createQrHistoryEntry({
+    type: 'text',
+    values: { ...blank, text: 'Public text', ssid: 'Private network', password: 'secret-password', hidden: true },
+    payload: 'Public text',
+    settings: { size: 320, foreground: '#07130b', background: '#ffffff' },
+  });
+  assert.equal(entry.values.password, '');
+  assert.equal(entry.values.ssid, '');
+  assert.equal(entry.values.hidden, false);
+});
+
+test('handles malformed and unavailable localStorage without throwing', () => {
+  assert.deepEqual(readQrHistory(memoryStorage('{broken')), { entries: [], error: true });
+  assert.deepEqual(readQrHistory({
+    getItem() { throw new Error('storage unavailable'); },
+  }), { entries: [], error: true });
+  assert.equal(writeQrHistory([], {
+    setItem() { throw new Error('storage unavailable'); },
+  }), false);
 });
