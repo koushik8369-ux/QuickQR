@@ -4,6 +4,7 @@ export const MAX_QR_HISTORY_ENTRIES = 20;
 const QR_TYPES = new Set(['text', 'website', 'video', 'email', 'phone', 'contact']);
 const QR_SIZES = new Set([128, 256, 320, 512, 1024]);
 const COLOR_PATTERN = /^#[\da-f]{6}$/i;
+const LOGO_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|webp);base64,[\da-z+/]+=*$/i;
 
 function isHistoryEntry(entry) {
   return Boolean(
@@ -22,6 +23,12 @@ function isHistoryEntry(entry) {
     && QR_SIZES.has(entry.settings.size)
     && COLOR_PATTERN.test(entry.settings.foreground)
     && COLOR_PATTERN.test(entry.settings.background)
+    && (entry.settings.logoDataUrl === undefined
+      || entry.settings.logoDataUrl === ''
+      || LOGO_DATA_URL_PATTERN.test(entry.settings.logoDataUrl))
+    && (entry.settings.logoEnabled === undefined || typeof entry.settings.logoEnabled === 'boolean')
+    && (entry.settings.logoSize === undefined
+      || (Number.isInteger(entry.settings.logoSize) && entry.settings.logoSize >= 12 && entry.settings.logoSize <= 24))
     && typeof entry.createdAt === 'string'
     && Number.isFinite(Date.parse(entry.createdAt)),
   );

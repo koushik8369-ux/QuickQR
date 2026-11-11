@@ -12,6 +12,13 @@ import {
   removeQrHistoryEntry,
   writeQrHistory,
 } from './qrHistory.js';
+import {
+  applyLogoToSvg,
+  MAX_LOGO_FILE_SIZE,
+  MAX_LOGO_SIZE_PERCENT,
+  MIN_LOGO_SIZE_PERCENT,
+  validateLogoFile,
+} from './qrLogo.js';
 
 const blank = {
   text: '',
@@ -101,6 +108,29 @@ test('generates browser-compatible PNG and SVG downloads using the selected size
   await assert.rejects(QRCode.toDataURL('x'.repeat(10000)));
 });
 
+test('validates supported logo image files, size limits, and percentage bounds', () => {
+  assert.equal(validateLogoFile({ name: 'mark.webp', type: 'image/webp', size: 1024 }), '');
+  assert.equal(validateLogoFile({ name: 'mark.jpg', type: 'image/jpeg', size: 1024 }), '');
+  assert.match(validateLogoFile({ name: 'mark.gif', type: 'image/gif', size: 1024 }), /PNG, JPG, JPEG, or WEBP/);
+  assert.match(
+    validateLogoFile({ name: 'mark.png', type: 'image/png', size: MAX_LOGO_FILE_SIZE + 1 }),
+    /smaller than 2 MB/,
+  );
+  assert.equal(MIN_LOGO_SIZE_PERCENT, 12);
+  assert.equal(MAX_LOGO_SIZE_PERCENT, 24);
+});
+
+test('embeds a centered logo and white padding in a valid SVG', async () => {
+  const logo = 'data:image/png;base64,AAAA';
+  const qrSvg = await QRCode.toString('Logo QR', { type: 'svg', width: 512, errorCorrectionLevel: 'H' });
+  const svgWithLogo = applyLogoToSvg(qrSvg, logo, 20);
+  assert.match(svgWithLogo, /data-quickqr-logo="true"/);
+  assert.match(svgWithLogo, /<rect[^>]+fill="#ffffff"/);
+  assert.match(svgWithLogo, /<image[^>]+href="data:image\/png;base64,AAAA"/);
+  assert.match(svgWithLogo, /<\/svg>\s*$/);
+  assert.throws(() => applyLogoToSvg(qrSvg, 'data:image/svg+xml;base64,AAAA', 20), /logo image is invalid/);
+});
+
 function memoryStorage(initialValue = null) {
   let value = initialValue;
   return {
@@ -129,7 +159,16 @@ function sampleHistoryEntry(id, overrides = {}) {
 
 test('stores, reloads, restores, deletes, and clears QR history', () => {
   const storage = memoryStorage();
-  const first = sampleHistoryEntry('first');
+  const first = sampleHistoryEntry('first', {
+    settings: {
+      size: 512,
+      foreground: '#123456',
+      background: '#fedcba',
+      logoDataUrl: 'data:image/webp;base64,AAAA',
+      logoEnabled: true,
+      logoSize: 22,
+    },
+  });
   const second = sampleHistoryEntry('second', { type: 'website' });
 
   assert.equal(writeQrHistory([second, first], storage), true);

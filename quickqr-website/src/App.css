@@ -591,6 +591,90 @@ select.form-control {
   margin: 10px 0 0;
 }
 
+.logo-settings {
+  display: grid;
+  gap: 9px;
+  margin-top: 17px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(128, 180, 139, 0.13);
+}
+
+.logo-settings .section-heading {
+  gap: 12px;
+}
+
+.logo-settings .section-heading h3 {
+  color: #e4f2e7;
+  font-size: 11px;
+}
+
+.logo-settings .settings-hint {
+  margin-top: 5px;
+}
+
+.logo-upload-preview {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  padding: 4px;
+  border: 1px solid rgba(0, 255, 102, 0.3);
+  border-radius: 7px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.logo-file-label,
+.logo-size-control {
+  color: #c5d3c9;
+  font-size: 10px;
+  font-weight: 590;
+}
+
+.logo-file-input {
+  min-height: 38px;
+  padding: 6px;
+}
+
+.logo-file-input::file-selector-button {
+  margin-right: 9px;
+  padding: 6px 9px;
+  border: 1px solid rgba(0, 255, 102, 0.34);
+  border-radius: 5px;
+  background: rgba(0, 255, 102, 0.08);
+  color: #c9ffda;
+  cursor: pointer;
+  font: inherit;
+}
+
+.logo-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.logo-remove {
+  min-height: 32px;
+}
+
+.logo-size-control {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+.logo-size-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--matrix-green);
+  cursor: pointer;
+}
+
+.logo-size-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .color-control {
   display: flex;
   min-height: 38px;
@@ -1507,6 +1591,19 @@ select.form-control {
 
   .settings-grid > .field:first-child {
     grid-column: 1 / -1;
+  }
+
+  .logo-settings {
+    gap: 10px;
+  }
+
+  .logo-options {
+    flex-wrap: wrap;
+  }
+
+  .logo-file-input {
+    min-width: 0;
+    font-size: 10px;
   }
 
   .form-footer {

@@ -9,6 +9,14 @@ import {
   removeQrHistoryEntry,
   writeQrHistory,
 } from './qrHistory.js';
+import {
+  applyLogoToPng,
+  applyLogoToSvg,
+  createHistoryLogoDataUrl,
+  MAX_LOGO_SIZE_PERCENT,
+  MIN_LOGO_SIZE_PERCENT,
+  readLogoFile,
+} from './qrLogo.js';
 import './App.css';
 
 const QR_TYPES = [
@@ -44,6 +52,9 @@ const INITIAL_SETTINGS = {
   size: 320,
   foreground: '#07130b',
   background: '#ffffff',
+  logoDataUrl: '',
+  logoEnabled: false,
+  logoSize: 18,
 };
 
 const MATRIX_CHARACTERS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン<>[]{}#$%';
@@ -323,7 +334,7 @@ function FormFields({ type, values, onChange, errors, onBlur }) {
   );
 }
 
-function QrSettings({ settings, onChange }) {
+function QrSettings({ settings, onChange, onLogoUpload, onLogoRemove, logoError }) {
   return (
     <section className="settings-section reveal" aria-labelledby="settings-title">
       <div className="section-heading reveal">
@@ -341,6 +352,61 @@ function QrSettings({ settings, onChange }) {
         <ColorPicker id="qr-background" label="Background" value={settings.background} onChange={(value) => onChange('background', value)} />
       </div>
       <p className="settings-hint reveal">High contrast helps your QR scan on more devices.</p>
+      <div className="logo-settings reveal">
+        <div className="section-heading">
+          <div>
+            <h3>Add Your Logo</h3>
+            <p className="settings-hint">PNG, JPG, JPEG, or WEBP. Maximum file size: 2 MB.</p>
+          </div>
+          {settings.logoDataUrl && (
+            <img className="logo-upload-preview" src={settings.logoDataUrl} alt="Uploaded logo preview" />
+          )}
+        </div>
+        <label className="logo-file-label" htmlFor="qr-logo">Choose logo image</label>
+        <input
+          className="form-control logo-file-input"
+          id="qr-logo"
+          type="file"
+          accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+          aria-describedby={logoError ? 'qr-logo-error' : 'qr-logo-hint'}
+          onChange={onLogoUpload}
+        />
+        <small className="field-hint" id="qr-logo-hint">The logo is stored only in this browser when saved in your QR history.</small>
+        {logoError && <small className="field-error" id="qr-logo-error" role="alert">{logoError}</small>}
+        {settings.logoDataUrl && (
+          <>
+            <div className="logo-options">
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={settings.logoEnabled}
+                  onChange={(event) => onChange('logoEnabled', event.target.checked)}
+                />
+                <span className="custom-checkbox" aria-hidden="true" />
+                <span>Show logo on QR code</span>
+              </label>
+              <button className="button button-quiet logo-remove" type="button" onClick={onLogoRemove}>
+                Remove logo
+              </button>
+            </div>
+            <label className="logo-size-control" htmlFor="qr-logo-size">
+              <span>Logo size</span>
+              <span>{settings.logoSize}%</span>
+            </label>
+            <input
+              className="logo-size-slider"
+              id="qr-logo-size"
+              type="range"
+              min={MIN_LOGO_SIZE_PERCENT}
+              max={MAX_LOGO_SIZE_PERCENT}
+              value={settings.logoSize}
+              disabled={!settings.logoEnabled}
+              onChange={(event) => onChange('logoSize', Number(event.target.value))}
+            />
+            <small className="field-hint">High error correction and white padding help keep the code scannable.</small>
+          </>
+        )}
+      </div>
     </section>
   );
 }
@@ -414,7 +480,7 @@ function HistoryCard({ entries, error, onRestore, onDelete, onClearAll }) {
       </div>
       {error && (
         <p className="history-notice" role="status">
-          History storage is unavailable or contains invalid data. You can still use the generator for this session.
+          QR history could not be read or saved. Your current QR code and downloads are still available.
         </p>
       )}
       <p className="history-privacy">Wi-Fi QR codes are not saved because they may contain passwords.</p>
@@ -472,6 +538,7 @@ function App() {
   const [svgUrl, setSvgUrl] = useState('');
   const [generationError, setGenerationError] = useState('');
   const [svgError, setSvgError] = useState('');
+  const [logoError, setLogoError] = useState('');
   const [generating, setGenerating] = useState(false);
   const [initialHistory] = useState(readQrHistory);
   const [history, setHistory] = useState(initialHistory.entries);
@@ -545,32 +612,49 @@ function App() {
         const options = {
           width: settings.size,
           margin: 2,
-          errorCorrectionLevel: 'M',
+          errorCorrectionLevel: settings.logoEnabled && settings.logoDataUrl ? 'H' : 'M',
           color: { dark: settings.foreground, light: settings.background },
         };
         const dataUrl = await QRCode.toDataURL(content, options);
+        const logoEnabled = settings.logoEnabled && Boolean(settings.logoDataUrl);
+        const previewDataUrl = logoEnabled
+          ? await applyLogoToPng(dataUrl, settings.logoDataUrl, settings.logoSize)
+          : dataUrl;
         if (active) {
-          setQr(dataUrl);
+          setQr(previewDataUrl);
           if (explicitGeneration) {
             if (type !== 'wifi') {
-              const entry = createQrHistoryEntry({
-                type,
-                values,
-                payload: content,
-                settings,
-              });
-              if (entry) {
-                const nextHistory = addQrHistoryEntry(historyRef.current, entry);
-                historyRef.current = nextHistory;
-                setHistory(nextHistory);
-                setHistoryStorageError(!writeQrHistory(nextHistory));
+              try {
+                const historySettings = {
+                  ...settings,
+                  logoDataUrl: settings.logoDataUrl
+                    ? await createHistoryLogoDataUrl(settings.logoDataUrl)
+                    : '',
+                };
+                const entry = createQrHistoryEntry({
+                  type,
+                  values,
+                  payload: content,
+                  settings: historySettings,
+                });
+                if (entry) {
+                  const nextHistory = addQrHistoryEntry(historyRef.current, entry);
+                  historyRef.current = nextHistory;
+                  setHistory(nextHistory);
+                  setHistoryStorageError(!writeQrHistory(nextHistory));
+                }
+              } catch {
+                setHistoryStorageError(true);
               }
             }
             explicitGenerationRef.current = null;
           }
         }
         try {
-          const svgMarkup = await QRCode.toString(content, { ...options, type: 'svg' });
+          const plainSvg = await QRCode.toString(content, { ...options, type: 'svg' });
+          const svgMarkup = logoEnabled
+            ? applyLogoToSvg(plainSvg, settings.logoDataUrl, settings.logoSize)
+            : plainSvg;
           if (active) {
             const svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
             setSvgUrl(URL.createObjectURL(svgBlob));
@@ -580,7 +664,7 @@ function App() {
         }
       } catch {
         if (active) {
-          setGenerationError('This content is too long or cannot be encoded as a QR code. Try shortening it.');
+          setGenerationError('This QR code could not be generated. Try shortening the content or using a different logo.');
           if (explicitGeneration) explicitGenerationRef.current = null;
         }
       } finally {
@@ -632,10 +716,11 @@ function App() {
     explicitGenerationRef.current = null;
     setType(entry.type);
     setValues({ ...INITIAL_VALUES, ...entry.values });
-    setSettings(entry.settings);
+    setSettings({ ...INITIAL_SETTINGS, ...entry.settings });
     setTouched({});
     setSubmitted(false);
     setGenerationError('');
+    setLogoError('');
     setGenerationRequest((request) => request + 1);
   };
 
@@ -689,7 +774,27 @@ function App() {
                     onBlur={(name) => setTouched((current) => ({ ...current, [name]: true }))}
                   />
                 </div>
-                <QrSettings settings={settings} onChange={updateSetting} />
+                <QrSettings
+                  settings={settings}
+                  onChange={updateSetting}
+                  onLogoUpload={async (event) => {
+                    const [file] = event.target.files ?? [];
+                    event.target.value = '';
+                    if (!file) return;
+                    setLogoError('');
+                    try {
+                      const logoDataUrl = await readLogoFile(file);
+                      setSettings((current) => ({ ...current, logoDataUrl, logoEnabled: true }));
+                    } catch (error) {
+                      setLogoError(error.message);
+                    }
+                  }}
+                  onLogoRemove={() => {
+                    setSettings((current) => ({ ...current, logoDataUrl: '', logoEnabled: false }));
+                    setLogoError('');
+                  }}
+                  logoError={logoError}
+                />
                 <div className="form-footer reveal">
                   <p className="reveal"><span className="privacy-lock" aria-hidden="true">◈</span> No sign-up. No tracking. Just QR.</p>
                   <button className="button button-primary reveal" type="submit" disabled={generating}>
