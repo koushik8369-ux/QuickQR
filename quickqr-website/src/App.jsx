@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import QRCode from 'qrcode';
 import { buildQrContent, validateForm } from './qrContent.js';
 import {
   addQrHistoryEntry,
@@ -24,6 +23,13 @@ import {
   hasScannableQrContrast,
   QR_COLOR_THEMES,
 } from './qrThemes.js';
+import {
+  createQrMatrix,
+  createQrRenderPlan,
+  QR_STYLE_OPTIONS,
+  renderQrPlanToCanvas,
+  renderQrPlanToSvg,
+} from './qrRenderer.js';
 import './App.css';
 
 const QR_TYPES = [
@@ -60,6 +66,7 @@ const INITIAL_SETTINGS = {
   colorTheme: 'matrix',
   foreground: '#39FF14',
   background: '#071A12',
+  qrStyle: 'square',
   logoDataUrl: '',
   logoEnabled: false,
   logoSize: 18,
@@ -274,7 +281,7 @@ function FormFields({ type, values, onChange, errors, onBlur }) {
       autoCapitalize: 'none',
       autoComplete: 'url',
       maxLength: 2048,
-      hint: type === 'video' ? 'Paste a public video link that opens in a browser.' : 'Include https:// for the most reliable scan.',
+      hint: type === 'video' ? 'Paste a public video link that opens in a browser.' : 'Include https:// so the link opens as a web address.',
     });
   }
   if (type === 'email') {
@@ -356,9 +363,46 @@ function QrSettings({ settings, onChange, onThemeSelect, onLogoUpload, onLogoRem
           <select className="form-control reveal" id="qr-size" value={settings.size} onChange={(event) => onChange('size', Number(event.target.value))}>
             {[128, 256, 320, 512, 1024].map((size) => <option value={size} key={size}>{size} × {size} px</option>)}
           </select>
+          <small className="field-hint">Dense codes may export larger to keep modules at least 2 px wide.</small>
         </div>
         <ColorPicker id="qr-foreground" label="QR color" value={settings.foreground} onChange={(value) => onChange('foreground', value)} />
         <ColorPicker id="qr-background" label="Background" value={settings.background} onChange={(value) => onChange('background', value)} />
+      </div>
+      <div className="qr-style-picker reveal" aria-labelledby="qr-style-title">
+        <div className="theme-picker-heading">
+          <div>
+            <h4 id="qr-style-title">QR Style</h4>
+            <p className="settings-hint">Choose how the data modules are drawn. Finder patterns stay square.</p>
+          </div>
+          <span className="theme-current" aria-live="polite">
+            {QR_STYLE_OPTIONS.find((style) => style.id === settings.qrStyle)?.label ?? 'Square'}
+          </span>
+        </div>
+        <div className="qr-style-grid" role="group" aria-label="QR module styles">
+          {QR_STYLE_OPTIONS.map((style) => (
+            <button
+              className="qr-style-card"
+              type="button"
+              key={style.id}
+              aria-pressed={settings.qrStyle === style.id}
+              aria-label={`${style.label}: ${style.description}`}
+              onClick={() => onChange('qrStyle', style.id)}
+            >
+              <span className={`qr-style-preview qr-style-preview--${style.id}`} aria-hidden="true">
+                {['11111', '10001', '10101', '10001', '11111'].flatMap((row, rowIndex) => (
+                  [...row].map((cell, columnIndex) => (
+                    <span
+                      key={`${rowIndex}-${columnIndex}`}
+                      className={cell === '1' ? 'is-dark' : ''}
+                    />
+                  ))
+                ))}
+              </span>
+              <span className="qr-style-name">{style.label}</span>
+              <span className="qr-style-description">{style.description}</span>
+            </button>
+          ))}
+        </div>
       </div>
       <div className="theme-picker reveal" aria-labelledby="theme-picker-title">
         <div className="theme-picker-heading">
@@ -404,7 +448,7 @@ function QrSettings({ settings, onChange, onThemeSelect, onLogoUpload, onLogoRem
           ))}
         </div>
       </div>
-      <p className="settings-hint reveal">High contrast helps your QR scan on more devices.</p>
+      <p className="settings-hint reveal">Higher contrast can improve camera readability; scan results vary by device.</p>
       <div className="logo-settings reveal">
         <div className="section-heading">
           <div>
@@ -456,7 +500,7 @@ function QrSettings({ settings, onChange, onThemeSelect, onLogoUpload, onLogoRem
               disabled={!settings.logoEnabled}
               onChange={(event) => onChange('logoSize', Number(event.target.value))}
             />
-            <small className="field-hint">High error correction and white padding help keep the code scannable.</small>
+            <small className="field-hint">High error correction and white padding help compensate for logo overlap; test with your target scanners.</small>
           </>
         )}
       </div>
@@ -485,7 +529,7 @@ function PreviewCard({ qr, svgUrl, error, svgError, onClear }) {
           <h2 id="preview-title">See it come to life</h2>
         </div>
         <span className={`status-pill${qr ? ' ready' : ''}`}>
-          <span className="status-dot" />{qr ? 'Ready to scan' : 'Live preview'}
+          <span className="status-dot" />{qr ? 'Preview ready' : 'Live preview'}
         </span>
       </div>
       <div className={`qr-stage reveal${qr ? ' has-qr' : ''}`}>
@@ -655,20 +699,25 @@ function App() {
     const timer = window.setTimeout(async () => {
       if (!active) return;
       if (!hasScannableQrContrast(settings.foreground, settings.background)) {
-        setGenerationError('Choose colors with at least 3:1 contrast for a reliably scannable QR code.');
+        setGenerationError('Choose colors with at least 3:1 contrast to continue. Scan results vary by device and lighting.');
         setGenerating(false);
         if (explicitGeneration) explicitGenerationRef.current = null;
         return;
       }
       setGenerating(true);
       try {
-        const options = {
-          width: settings.size,
+        const errorCorrectionLevel = settings.logoEnabled && settings.logoDataUrl ? 'H' : 'M';
+        const matrix = createQrMatrix(content, errorCorrectionLevel);
+        const renderPlan = createQrRenderPlan(matrix, {
+          size: settings.size,
           margin: 2,
-          errorCorrectionLevel: settings.logoEnabled && settings.logoDataUrl ? 'H' : 'M',
-          color: { dark: settings.foreground, light: settings.background },
-        };
-        const dataUrl = await QRCode.toDataURL(content, options);
+          style: settings.qrStyle,
+        });
+        const dataUrl = renderQrPlanToCanvas(
+          renderPlan,
+          settings.foreground,
+          settings.background,
+        ).toDataURL('image/png');
         const logoEnabled = settings.logoEnabled && Boolean(settings.logoDataUrl);
         const previewDataUrl = logoEnabled
           ? await applyLogoToPng(dataUrl, settings.logoDataUrl, settings.logoSize)
@@ -704,7 +753,11 @@ function App() {
           }
         }
         try {
-          const plainSvg = await QRCode.toString(content, { ...options, type: 'svg' });
+          const plainSvg = renderQrPlanToSvg(
+            renderPlan,
+            settings.foreground,
+            settings.background,
+          );
           const svgMarkup = logoEnabled
             ? applyLogoToSvg(plainSvg, settings.logoDataUrl, settings.logoSize)
             : plainSvg;

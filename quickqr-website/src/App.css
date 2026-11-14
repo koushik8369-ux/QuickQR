@@ -599,6 +599,97 @@ select.form-control {
   background: linear-gradient(135deg, rgba(10, 28, 16, 0.82), rgba(3, 10, 6, 0.72));
 }
 
+.qr-style-picker {
+  margin-top: 16px;
+  padding: 13px;
+  border: 1px solid rgba(57, 255, 20, 0.2);
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(10, 28, 16, 0.82), rgba(3, 10, 6, 0.72));
+}
+
+.qr-style-grid {
+  display: grid;
+  margin-top: 11px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.qr-style-card {
+  display: grid;
+  min-width: 0;
+  justify-items: center;
+  gap: 6px;
+  padding: 9px 5px;
+  border: 1px solid rgba(142, 175, 148, 0.2);
+  border-radius: 7px;
+  background: rgba(1, 7, 3, 0.54);
+  color: #d7e4da;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.qr-style-card:hover {
+  border-color: rgba(57, 255, 20, 0.5);
+  transform: translateY(-2px);
+}
+
+.qr-style-card[aria-pressed="true"] {
+  border-color: var(--matrix-green);
+  background: rgba(57, 255, 20, 0.08);
+  box-shadow: 0 0 0 1px rgba(57, 255, 20, 0.18), 0 0 14px rgba(57, 255, 20, 0.11);
+}
+
+.qr-style-card:focus-visible {
+  outline: 2px solid #a2ffb7;
+  outline-offset: 2px;
+}
+
+.qr-style-preview {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgba(57, 255, 20, 0.16);
+  border-radius: 5px;
+  background: #071a12;
+}
+
+.qr-style-preview span {
+  min-width: 0;
+  background: transparent;
+}
+
+.qr-style-preview .is-dark {
+  background: var(--matrix-green);
+}
+
+.qr-style-preview--rounded .is-dark {
+  border-radius: 2px;
+}
+
+.qr-style-preview--dots .is-dark {
+  border-radius: 50%;
+}
+
+.qr-style-preview--modern .is-dark {
+  clip-path: polygon(18% 0, 82% 0, 100% 18%, 100% 82%, 82% 100%, 18% 100%, 0 82%, 0 18%);
+}
+
+.qr-style-name {
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.qr-style-description {
+  min-height: 22px;
+  color: #91a397;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
 .theme-picker-heading {
   display: flex;
   align-items: flex-start;
@@ -1610,7 +1701,9 @@ select.form-control {
   .qr-image,
   .theme-card,
   .theme-card:hover,
-  .theme-selection-indicator {
+  .theme-selection-indicator,
+  .qr-style-card,
+  .qr-style-card:hover {
     transition: none;
     transform: none;
   }
@@ -1759,6 +1852,10 @@ select.form-control {
   }
 
   .theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .qr-style-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

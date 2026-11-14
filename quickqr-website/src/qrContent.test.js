@@ -14,6 +14,7 @@ import {
 } from './qrHistory.js';
 import {
   applyLogoToSvg,
+  applyLogoToPng,
   MAX_LOGO_FILE_SIZE,
   MAX_LOGO_SIZE_PERCENT,
   MIN_LOGO_SIZE_PERCENT,
@@ -27,6 +28,13 @@ import {
   inferQrColorThemeId,
   QR_COLOR_THEMES,
 } from './qrThemes.js';
+import {
+  createQrMatrix,
+  createQrRenderPlan,
+  drawQrPlanToCanvas,
+  QR_STYLE_IDS,
+  renderQrPlanToSvg,
+} from './qrRenderer.js';
 
 const blank = {
   text: '',
@@ -120,6 +128,159 @@ test('generates PNG and SVG exports with each theme and preserves the white logo
     assert.match(logoSvg, /data:image\/png;base64,AAAA/);
   }
   await assert.rejects(QRCode.toDataURL('x'.repeat(10000)));
+});
+
+test('renders all QR styles from one protected matrix at representative payload lengths and sizes', () => {
+  const cases = [
+    { payload: 'QuickQR', size: 128 },
+    { payload: `https://example.com/${'qr-style/'.repeat(20)}`, size: 320 },
+    { payload: 'x'.repeat(900), size: 1024 },
+  ];
+
+  for (const { payload, size } of cases) {
+    const matrix = createQrMatrix(payload, 'M');
+    const baseData = [...matrix.modules.data];
+    for (const style of QR_STYLE_IDS) {
+      const plan = createQrRenderPlan(matrix, { size, margin: 2, style });
+      assert.equal(plan.moduleSize, matrix.modules.size);
+      assert.equal(plan.moduleCount, matrix.modules.size + 4);
+      assert.ok(plan.outputSize >= size);
+      assert.ok(plan.scale >= 2);
+      assert.ok(plan.darkModules.every((module) => (
+        module.x >= 2
+        && module.y >= 2
+        && module.x < matrix.modules.size + 2
+        && module.y < matrix.modules.size + 2
+      )));
+      assert.ok(plan.darkModules.filter((module) => module.reserved)
+        .every((module) => module.shape === 'square'));
+      assert.deepEqual([...matrix.modules.data], baseData);
+
+      const svg = renderQrPlanToSvg(plan, '#39FF14', '#071A12');
+      assert.match(svg, new RegExp(`width="${plan.outputSize}" height="${plan.outputSize}"`));
+      assert.match(svg, new RegExp(`viewBox="0 0 ${plan.moduleCount} ${plan.moduleCount}"`));
+      assert.match(svg, /<rect width="\d+" height="\d+" fill="#071A12"\/>/);
+      assert.equal((svg.match(/<circle /g) ?? []).length, plan.darkModules.filter(({ shape }) => shape === 'circle').length);
+      assert.equal((svg.match(/<polygon /g) ?? []).length, plan.darkModules.filter(({ shape }) => shape === 'chamfered').length);
+      assert.equal((svg.match(/<rect /g) ?? []).length, 1 + plan.darkModules.filter(({ shape }) => (
+        shape === 'square' || shape === 'rounded'
+      )).length);
+    }
+  }
+});
+
+test('preserves finder-pattern geometry and guards the reserved-module API', () => {
+  const matrix = createQrMatrix('Finder pattern check', 'M');
+  const size = matrix.modules.size;
+  const origins = [[0, 0], [0, size - 7], [size - 7, 0]];
+
+  for (const [top, left] of origins) {
+    for (let row = 0; row < 7; row += 1) {
+      for (let column = 0; column < 7; column += 1) {
+        const expectedDark = row === 0 || row === 6 || column === 0 || column === 6
+          || (row >= 2 && row <= 4 && column >= 2 && column <= 4);
+        const index = (top + row) * size + left + column;
+        assert.equal(Boolean(matrix.modules.data[index]), expectedDark);
+        assert.equal(Boolean(matrix.modules.isReserved(top + row, left + column)), true);
+      }
+    }
+  }
+
+  const matrixWithoutReservedMetadata = {
+    modules: { ...matrix.modules, isReserved: undefined },
+  };
+  assert.throws(
+    () => createQrRenderPlan(matrixWithoutReservedMetadata, { size: 320, style: 'dots' }),
+    /cannot identify protected finder and function modules/,
+  );
+});
+
+test('keeps canvas drawing operations consistent with SVG module geometry for every theme', () => {
+  for (const theme of QR_COLOR_THEMES) {
+    const matrix = createQrMatrix('Canvas and SVG style parity', 'H');
+    for (const style of QR_STYLE_IDS) {
+      const plan = createQrRenderPlan(matrix, { size: 512, margin: 2, style });
+      const operations = { rectangles: [], circles: 0, lineSegments: 0, roundedSegments: 0 };
+      const context = {
+        fillStyle: '',
+        fillRect(...args) { operations.rectangles.push(args); },
+        save() {},
+        scale() {},
+        restore() {},
+        beginPath() {},
+        moveTo() {},
+        lineTo() { operations.lineSegments += 1; },
+        quadraticCurveTo() { operations.roundedSegments += 1; },
+        closePath() {},
+        arc() { operations.circles += 1; },
+        fill() {},
+      };
+      drawQrPlanToCanvas(context, plan, theme.foreground, theme.background);
+      const svg = renderQrPlanToSvg(plan, theme.foreground, theme.background);
+      const squareCount = plan.darkModules.filter(({ shape }) => shape === 'square').length;
+      const roundedCount = plan.darkModules.filter(({ shape }) => shape === 'rounded').length;
+      const circleCount = plan.darkModules.filter(({ shape }) => shape === 'circle').length;
+      const chamferedCount = plan.darkModules.filter(({ shape }) => shape === 'chamfered').length;
+
+      assert.equal(operations.rectangles.length, squareCount + 1);
+      assert.equal(operations.roundedSegments, roundedCount * 4);
+      assert.equal(operations.lineSegments, roundedCount * 4 + chamferedCount * 7);
+      assert.equal(operations.circles, circleCount);
+      assert.equal((svg.match(/<polygon /g) ?? []).length, chamferedCount);
+      assert.ok(svg.includes(`fill="${theme.foreground}"`));
+      assert.ok(svg.includes(`fill="${theme.background}"`));
+    }
+  }
+});
+
+test('applies the existing PNG logo composition to a custom-rendered image', async () => {
+  const originalImage = globalThis.Image;
+  const originalDocument = globalThis.document;
+  let drawCount = 0;
+  let backingCount = 0;
+  globalThis.Image = class {
+    constructor() {
+      this.naturalWidth = 128;
+      this.naturalHeight = 128;
+    }
+
+    set src(value) {
+      this.source = value;
+      queueMicrotask(() => this.onload());
+    }
+  };
+  globalThis.document = {
+    createElement() {
+      return {
+        width: 0,
+        height: 0,
+        getContext() {
+          return {
+            drawImage() { drawCount += 1; },
+            fillRect() { backingCount += 1; },
+            set fillStyle(value) {},
+          };
+        },
+        toDataURL() { return 'data:image/png;base64,COMPLETE'; },
+      };
+    },
+  };
+
+  try {
+    const result = await applyLogoToPng(
+      'data:image/png;base64,QR',
+      'data:image/png;base64,LOGO',
+      18,
+    );
+    assert.equal(result, 'data:image/png;base64,COMPLETE');
+    assert.equal(drawCount, 2);
+    assert.equal(backingCount, 1);
+  } finally {
+    if (originalImage === undefined) delete globalThis.Image;
+    else globalThis.Image = originalImage;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
 });
 
 test('selects all requested themes and marks manual colour changes as Custom', () => {
@@ -221,7 +382,7 @@ test('stores, reloads, restores, deletes, and clears QR history', () => {
   assert.deepEqual(reloaded.entries, [second, first]);
   assert.deepEqual(getQrHistoryEntry(reloaded.entries, 'first'), {
     ...first,
-    settings: { ...first.settings, colorTheme: 'custom' },
+    settings: { ...first.settings, colorTheme: 'custom', qrStyle: 'square' },
   });
 
   const afterDelete = removeQrHistoryEntry(reloaded.entries, 'second');
@@ -261,6 +422,29 @@ test('saves and restores selected themes and custom colours in QR history', () =
     settings: { size: 320, foreground: '#55C8FF', background: '#0B1B3A' },
   });
   assert.equal(getQrHistoryEntry([legacyEntry], 'legacy').settings.colorTheme, 'ocean');
+});
+
+test('saves, validates, restores QR styles, and defaults legacy entries to Square', () => {
+  const storage = memoryStorage();
+  const rounded = createQrHistoryEntry({
+    type: 'text',
+    values: { ...blank, text: 'Rounded QR' },
+    payload: 'Rounded QR',
+    settings: { size: 320, foreground: '#39FF14', background: '#071A12', qrStyle: 'rounded' },
+  });
+  assert.equal(writeQrHistory([rounded], storage), true);
+  assert.equal(getQrHistoryEntry(readQrHistory(storage).entries, rounded.id).settings.qrStyle, 'rounded');
+
+  const legacyEntry = sampleHistoryEntry('legacy-style');
+  assert.equal(getQrHistoryEntry([legacyEntry], 'legacy-style').settings.qrStyle, 'square');
+
+  const unsupportedStyle = sampleHistoryEntry('unsupported-style', {
+    settings: { size: 320, foreground: '#07130b', background: '#ffffff', qrStyle: 'sparkles' },
+  });
+  assert.deepEqual(readQrHistory(memoryStorage(JSON.stringify({
+    version: 1,
+    entries: [unsupportedStyle],
+  }))), { entries: [], error: true });
 });
 
 test('keeps only the latest 20 entries and excludes Wi-Fi entries and credentials', () => {

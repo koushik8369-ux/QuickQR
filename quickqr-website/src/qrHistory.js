@@ -2,6 +2,7 @@ import {
   getQrColorThemeId,
   isQrColorThemeCompatible,
 } from './qrThemes.js';
+import { QR_STYLE_IDS } from './qrRenderer.js';
 
 export const QR_HISTORY_STORAGE_KEY = 'quickqr_history_v1';
 export const MAX_QR_HISTORY_ENTRIES = 20;
@@ -39,6 +40,7 @@ function isHistoryEntry(entry) {
     && (entry.settings.logoEnabled === undefined || typeof entry.settings.logoEnabled === 'boolean')
     && (entry.settings.logoSize === undefined
       || (Number.isInteger(entry.settings.logoSize) && entry.settings.logoSize >= 12 && entry.settings.logoSize <= 24))
+    && (entry.settings.qrStyle === undefined || QR_STYLE_IDS.includes(entry.settings.qrStyle))
     && typeof entry.createdAt === 'string'
     && Number.isFinite(Date.parse(entry.createdAt)),
   );
@@ -112,6 +114,7 @@ export function getQrHistoryEntry(entries, id) {
     settings: {
       ...entry.settings,
       colorTheme: getQrColorThemeId(entry.settings),
+      qrStyle: entry.settings.qrStyle ?? 'square',
     },
   } : null;
 }
