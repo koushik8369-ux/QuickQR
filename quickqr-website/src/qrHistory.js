@@ -1,3 +1,8 @@
+import {
+  getQrColorThemeId,
+  isQrColorThemeCompatible,
+} from './qrThemes.js';
+
 export const QR_HISTORY_STORAGE_KEY = 'quickqr_history_v1';
 export const MAX_QR_HISTORY_ENTRIES = 20;
 
@@ -23,6 +28,11 @@ function isHistoryEntry(entry) {
     && QR_SIZES.has(entry.settings.size)
     && COLOR_PATTERN.test(entry.settings.foreground)
     && COLOR_PATTERN.test(entry.settings.background)
+    && isQrColorThemeCompatible(
+      entry.settings.colorTheme,
+      entry.settings.foreground,
+      entry.settings.background,
+    )
     && (entry.settings.logoDataUrl === undefined
       || entry.settings.logoDataUrl === ''
       || LOGO_DATA_URL_PATTERN.test(entry.settings.logoDataUrl))
@@ -99,7 +109,10 @@ export function getQrHistoryEntry(entries, id) {
   return entry ? {
     ...entry,
     values: { ...entry.values },
-    settings: { ...entry.settings },
+    settings: {
+      ...entry.settings,
+      colorTheme: getQrColorThemeId(entry.settings),
+    },
   } : null;
 }
 

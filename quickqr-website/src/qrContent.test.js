@@ -19,6 +19,14 @@ import {
   MIN_LOGO_SIZE_PERCENT,
   validateLogoFile,
 } from './qrLogo.js';
+import {
+  applyManualQrColor,
+  applyQrColorTheme,
+  CUSTOM_QR_THEME_ID,
+  hasScannableQrContrast,
+  inferQrColorThemeId,
+  QR_COLOR_THEMES,
+} from './qrThemes.js';
 
 const blank = {
   text: '',
@@ -85,27 +93,63 @@ test('creates a mailto QR with correctly encoded optional content', () => {
   );
 });
 
-test('generates browser-compatible PNG and SVG downloads using the selected size and colors', async () => {
+test('generates PNG and SVG exports with each theme and preserves the white logo backing', async () => {
   const options = {
     width: 512,
     margin: 2,
     errorCorrectionLevel: 'M',
-    color: { dark: '#123456', light: '#fedcba' },
   };
-  const png = await QRCode.toDataURL('WIFI:T:WPA;S:Office;P:correcthorsebattery;;', {
-    ...options,
-  });
-  assert.match(png, /^data:image\/png;base64,/);
-  const svg = await QRCode.toString('WIFI:T:WPA;S:Office;P:correcthorsebattery;;', {
-    ...options,
-    type: 'svg',
-  });
-  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
-  assert.match(svg, /width="512" height="512"/);
-  assert.match(svg, /<path fill="#fedcba"/);
-  assert.match(svg, /<path stroke="#123456"/);
-  assert.match(svg, /<\/svg>\s*$/);
+  for (const theme of QR_COLOR_THEMES) {
+    const themeSettings = applyQrColorTheme({}, theme.id);
+    const themeOptions = {
+      ...options,
+      color: { dark: themeSettings.foreground, light: themeSettings.background },
+    };
+    const png = await QRCode.toDataURL('Theme export', themeOptions);
+    assert.match(png, /^data:image\/png;base64,/);
+
+    const svg = await QRCode.toString('Theme export', { ...themeOptions, type: 'svg' });
+    assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+    assert.match(svg, /width="512" height="512"/);
+    assert.ok(svg.toLowerCase().includes(`fill="${theme.background.toLowerCase()}"`));
+    assert.ok(svg.toLowerCase().includes(`stroke="${theme.foreground.toLowerCase()}"`));
+    assert.match(svg, /<\/svg>\s*$/);
+
+    const logoSvg = applyLogoToSvg(svg, 'data:image/png;base64,AAAA', 20);
+    assert.match(logoSvg, /<rect[^>]+fill="#ffffff"/);
+    assert.match(logoSvg, /data:image\/png;base64,AAAA/);
+  }
   await assert.rejects(QRCode.toDataURL('x'.repeat(10000)));
+});
+
+test('selects all requested themes and marks manual colour changes as Custom', () => {
+  assert.deepEqual(QR_COLOR_THEMES.map(({ name, foreground, background }) => (
+    { name, foreground, background }
+  )), [
+    { name: 'Matrix', foreground: '#39FF14', background: '#071A12' },
+    { name: 'Classic', foreground: '#111111', background: '#FFFFFF' },
+    { name: 'Ocean', foreground: '#55C8FF', background: '#0B1B3A' },
+    { name: 'Purple', foreground: '#D9A7FF', background: '#241038' },
+    { name: 'Ruby', foreground: '#FFB0B8', background: '#3A1018' },
+    { name: 'Emerald', foreground: '#A7FFE4', background: '#07352D' },
+  ]);
+  for (const theme of QR_COLOR_THEMES) {
+    const selected = applyQrColorTheme({}, theme.id);
+    assert.equal(selected.colorTheme, theme.id);
+    assert.equal(selected.foreground, theme.foreground);
+    assert.equal(selected.background, theme.background);
+    assert.equal(hasScannableQrContrast(theme.foreground, theme.background), true);
+  }
+
+  const manuallyChanged = applyManualQrColor(
+    applyQrColorTheme({}, 'matrix'),
+    'foreground',
+    '#111111',
+  );
+  const customMatchingPreset = applyManualQrColor(manuallyChanged, 'background', '#FFFFFF');
+  assert.equal(customMatchingPreset.colorTheme, CUSTOM_QR_THEME_ID);
+  assert.equal(inferQrColorThemeId(customMatchingPreset.foreground, customMatchingPreset.background), 'classic');
+  assert.equal(hasScannableQrContrast('#666666', '#777777'), false);
 });
 
 test('validates supported logo image files, size limits, and percentage bounds', () => {
@@ -175,7 +219,10 @@ test('stores, reloads, restores, deletes, and clears QR history', () => {
   const reloaded = readQrHistory(storage);
   assert.equal(reloaded.error, false);
   assert.deepEqual(reloaded.entries, [second, first]);
-  assert.deepEqual(getQrHistoryEntry(reloaded.entries, 'first'), first);
+  assert.deepEqual(getQrHistoryEntry(reloaded.entries, 'first'), {
+    ...first,
+    settings: { ...first.settings, colorTheme: 'custom' },
+  });
 
   const afterDelete = removeQrHistoryEntry(reloaded.entries, 'second');
   assert.deepEqual(afterDelete, [first]);
@@ -184,6 +231,36 @@ test('stores, reloads, restores, deletes, and clears QR history', () => {
 
   assert.equal(writeQrHistory([], storage), true);
   assert.deepEqual(readQrHistory(storage).entries, []);
+});
+
+test('saves and restores selected themes and custom colours in QR history', () => {
+  const storage = memoryStorage();
+  const oceanSettings = applyQrColorTheme({ size: 320 }, 'ocean');
+  const customSettings = applyManualQrColor(oceanSettings, 'foreground', '#44CCAA');
+  const entry = createQrHistoryEntry({
+    type: 'text',
+    values: { ...blank, text: 'Theme history' },
+    payload: 'Theme history',
+    settings: customSettings,
+  });
+  const presetEntry = createQrHistoryEntry({
+    type: 'text',
+    values: { ...blank, text: 'Preset history' },
+    payload: 'Preset history',
+    settings: oceanSettings,
+  });
+  assert.equal(writeQrHistory([entry, presetEntry], storage), true);
+  const storedEntries = readQrHistory(storage).entries;
+  const restored = getQrHistoryEntry(storedEntries, entry.id);
+  assert.equal(restored.settings.colorTheme, CUSTOM_QR_THEME_ID);
+  assert.equal(restored.settings.foreground, '#44CCAA');
+  assert.equal(restored.settings.background, oceanSettings.background);
+  assert.equal(getQrHistoryEntry(storedEntries, presetEntry.id).settings.colorTheme, 'ocean');
+
+  const legacyEntry = sampleHistoryEntry('legacy', {
+    settings: { size: 320, foreground: '#55C8FF', background: '#0B1B3A' },
+  });
+  assert.equal(getQrHistoryEntry([legacyEntry], 'legacy').settings.colorTheme, 'ocean');
 });
 
 test('keeps only the latest 20 entries and excludes Wi-Fi entries and credentials', () => {

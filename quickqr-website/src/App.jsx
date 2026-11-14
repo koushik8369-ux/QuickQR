@@ -17,6 +17,13 @@ import {
   MIN_LOGO_SIZE_PERCENT,
   readLogoFile,
 } from './qrLogo.js';
+import {
+  applyManualQrColor,
+  applyQrColorTheme,
+  getQrColorTheme,
+  hasScannableQrContrast,
+  QR_COLOR_THEMES,
+} from './qrThemes.js';
 import './App.css';
 
 const QR_TYPES = [
@@ -50,8 +57,9 @@ const INITIAL_VALUES = {
 
 const INITIAL_SETTINGS = {
   size: 320,
-  foreground: '#07130b',
-  background: '#ffffff',
+  colorTheme: 'matrix',
+  foreground: '#39FF14',
+  background: '#071A12',
   logoDataUrl: '',
   logoEnabled: false,
   logoSize: 18,
@@ -334,7 +342,8 @@ function FormFields({ type, values, onChange, errors, onBlur }) {
   );
 }
 
-function QrSettings({ settings, onChange, onLogoUpload, onLogoRemove, logoError }) {
+function QrSettings({ settings, onChange, onThemeSelect, onLogoUpload, onLogoRemove, logoError }) {
+  const selectedTheme = getQrColorTheme(settings.colorTheme);
   return (
     <section className="settings-section reveal" aria-labelledby="settings-title">
       <div className="section-heading reveal">
@@ -350,6 +359,50 @@ function QrSettings({ settings, onChange, onLogoUpload, onLogoRemove, logoError 
         </div>
         <ColorPicker id="qr-foreground" label="QR color" value={settings.foreground} onChange={(value) => onChange('foreground', value)} />
         <ColorPicker id="qr-background" label="Background" value={settings.background} onChange={(value) => onChange('background', value)} />
+      </div>
+      <div className="theme-picker reveal" aria-labelledby="theme-picker-title">
+        <div className="theme-picker-heading">
+          <div>
+            <h4 id="theme-picker-title">Colour Themes</h4>
+            <p className="settings-hint">Choose a ready-made palette or fine-tune either colour.</p>
+          </div>
+          <span className="theme-current" aria-live="polite">
+            {selectedTheme?.name ?? 'Custom'}
+          </span>
+        </div>
+        <div className="theme-grid" role="group" aria-label="QR colour themes">
+          {QR_COLOR_THEMES.map((theme) => (
+            <button
+              className="theme-card"
+              type="button"
+              key={theme.id}
+              aria-pressed={settings.colorTheme === theme.id}
+              aria-label={`${theme.name} theme. QR colour ${theme.foreground}, background ${theme.background}.`}
+              onClick={() => onThemeSelect(theme.id)}
+            >
+              <span className="theme-card-top" aria-hidden="true">
+                <span className="theme-preview" style={{ backgroundColor: theme.background }}>
+                  <span
+                    className="theme-mini-qr"
+                    style={{
+                      '--theme-foreground': theme.foreground,
+                      '--theme-background': theme.background,
+                    }}
+                  />
+                </span>
+                <span className="theme-selection-indicator">✓</span>
+              </span>
+              <span className="theme-card-name">{theme.name}</span>
+              <span className="theme-colour-values">
+                <span className="theme-colour-dots" aria-hidden="true">
+                  <span style={{ backgroundColor: theme.foreground }} />
+                  <span style={{ backgroundColor: theme.background }} />
+                </span>
+                <span className="theme-hex-pair">{theme.foreground} · {theme.background}</span>
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
       <p className="settings-hint reveal">High contrast helps your QR scan on more devices.</p>
       <div className="logo-settings reveal">
@@ -601,7 +654,7 @@ function App() {
     const content = buildQrContent(type, values);
     const timer = window.setTimeout(async () => {
       if (!active) return;
-      if (settings.foreground === settings.background || contrastRatio(settings.foreground, settings.background) < 3) {
+      if (!hasScannableQrContrast(settings.foreground, settings.background)) {
         setGenerationError('Choose colors with at least 3:1 contrast for a reliably scannable QR code.');
         setGenerating(false);
         if (explicitGeneration) explicitGenerationRef.current = null;
@@ -680,7 +733,16 @@ function App() {
   }, [type, values, settings, generationRequest, validation.valid]);
 
   const updateValue = (name, value) => setValues((current) => ({ ...current, [name]: value }));
-  const updateSetting = (name, value) => setSettings((current) => ({ ...current, [name]: value }));
+  const updateSetting = (name, value) => {
+    if (name === 'foreground' || name === 'background') {
+      setSettings((current) => applyManualQrColor(current, name, value));
+      return;
+    }
+    setSettings((current) => ({ ...current, [name]: value }));
+  };
+  const selectTheme = (themeId) => {
+    setSettings((current) => applyQrColorTheme(current, themeId));
+  };
 
   const handleGenerate = () => {
     setSubmitted(true);
@@ -777,6 +839,7 @@ function App() {
                 <QrSettings
                   settings={settings}
                   onChange={updateSetting}
+                  onThemeSelect={selectTheme}
                   onLogoUpload={async (event) => {
                     const [file] = event.target.files ?? [];
                     event.target.value = '';
@@ -831,19 +894,6 @@ function App() {
       </div>
     </div>
   );
-}
-
-function contrastRatio(foreground, background) {
-  const luminance = (hex) => {
-    const components = hex.match(/[0-9a-f]{2}/gi).map((part) => parseInt(part, 16) / 255);
-    const [red, green, blue] = components.map((value) => (
-      value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
-    ));
-    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-  };
-  const first = luminance(foreground);
-  const second = luminance(background);
-  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
 export default App;
