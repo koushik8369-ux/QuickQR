@@ -13,10 +13,18 @@ import {
   writeQrHistory,
 } from './qrHistory.js';
 import {
+  DEFAULT_LOGO_PADDING_PERCENT,
+  DEFAULT_LOGO_POSITION,
+  DEFAULT_LOGO_SIZE_PERCENT,
+  LOGO_POSITION_OPTIONS,
+  LogoFinderOverlapError,
+  MAX_LOGO_PADDING_PERCENT,
   applyLogoToSvg,
   applyLogoToPng,
+  createLogoGeometry,
   MAX_LOGO_FILE_SIZE,
   MAX_LOGO_SIZE_PERCENT,
+  MIN_LOGO_PADDING_PERCENT,
   MIN_LOGO_SIZE_PERCENT,
   validateLogoFile,
 } from './qrLogo.js';
@@ -32,6 +40,7 @@ import {
   createQrMatrix,
   createQrRenderPlan,
   drawQrPlanToCanvas,
+  getQrErrorCorrectionLevel,
   MAX_QR_QUIET_ZONE_MODULES,
   MIN_QR_QUIET_ZONE_MODULES,
   QR_STYLE_IDS,
@@ -125,7 +134,10 @@ test('generates PNG and SVG exports with each theme and preserves the white logo
     assert.ok(svg.toLowerCase().includes(`stroke="${theme.foreground.toLowerCase()}"`));
     assert.match(svg, /<\/svg>\s*$/);
 
-    const logoSvg = applyLogoToSvg(svg, 'data:image/png;base64,AAAA', 20);
+    const logoPlan = createQrRenderPlan(createQrMatrix('Theme export', 'H'), { size: 512, margin: 2 });
+    const logoGeometry = createLogoGeometry(logoPlan, { logoSize: 20 });
+    const customSvg = renderQrPlanToSvg(logoPlan, theme.foreground, theme.background);
+    const logoSvg = applyLogoToSvg(customSvg, 'data:image/png;base64,AAAA', logoGeometry);
     assert.match(logoSvg, /<rect[^>]+fill="#ffffff"/);
     assert.match(logoSvg, /data:image\/png;base64,AAAA/);
   }
@@ -312,16 +324,14 @@ test('rejects invalid transparent-background renderer options', () => {
 test('applies the existing PNG logo composition to a custom-rendered image', async () => {
   const originalImage = globalThis.Image;
   const originalDocument = globalThis.document;
-  let drawCount = 0;
-  let backingCount = 0;
+  const drawCalls = [];
+  const backingCalls = [];
+  const plan = createQrRenderPlan(createQrMatrix('Logo PNG placement', 'H'), { size: 512, margin: 2 });
   globalThis.Image = class {
-    constructor() {
-      this.naturalWidth = 128;
-      this.naturalHeight = 128;
-    }
-
     set src(value) {
       this.source = value;
+      this.naturalWidth = value === 'data:image/png;base64,QR' ? plan.outputSize : 128;
+      this.naturalHeight = this.naturalWidth;
       queueMicrotask(() => this.onload());
     }
   };
@@ -333,10 +343,10 @@ test('applies the existing PNG logo composition to a custom-rendered image', asy
         getContext() {
           return {
             fillStyle: '',
-            drawImage() { drawCount += 1; },
+            drawImage(...args) { drawCalls.push(args); },
             fillRect() {
               assert.equal(this.fillStyle, '#ffffff');
-              backingCount += 1;
+              backingCalls.push([...arguments]);
             },
           };
         },
@@ -346,15 +356,33 @@ test('applies the existing PNG logo composition to a custom-rendered image', asy
   };
 
   try {
-    for (const qrDataUrl of [
-      'data:image/png;base64,OPAQUE_QR',
-      'data:image/png;base64,TRANSPARENT_QR',
-    ]) {
-      const result = await applyLogoToPng(qrDataUrl, 'data:image/png;base64,LOGO', 18);
+    for (const { id: logoPosition } of LOGO_POSITION_OPTIONS) {
+      const geometry = createLogoGeometry(plan, {
+        logoPosition,
+        logoSize: DEFAULT_LOGO_SIZE_PERCENT,
+        logoPadding: DEFAULT_LOGO_PADDING_PERCENT,
+      });
+      const result = await applyLogoToPng(
+        'data:image/png;base64,QR',
+        'data:image/png;base64,LOGO',
+        geometry,
+      );
       assert.equal(result, 'data:image/png;base64,COMPLETE');
+      assert.deepEqual(backingCalls[backingCalls.length - 1], [
+        geometry.backing.x * geometry.scale,
+        geometry.backing.y * geometry.scale,
+        geometry.backing.size * geometry.scale,
+        geometry.backing.size * geometry.scale,
+      ]);
+      assert.deepEqual(drawCalls[drawCalls.length - 1].slice(1), [
+        geometry.logo.x * geometry.scale,
+        geometry.logo.y * geometry.scale,
+        geometry.logo.size * geometry.scale,
+        geometry.logo.size * geometry.scale,
+      ]);
     }
-    assert.equal(drawCount, 4);
-    assert.equal(backingCount, 2);
+    assert.equal(drawCalls.length, LOGO_POSITION_OPTIONS.length * 2);
+    assert.equal(backingCalls.length, LOGO_POSITION_OPTIONS.length);
   } finally {
     if (originalImage === undefined) delete globalThis.Image;
     else globalThis.Image = originalImage;
@@ -404,22 +432,30 @@ test('validates supported logo image files, size limits, and percentage bounds',
   );
   assert.equal(MIN_LOGO_SIZE_PERCENT, 12);
   assert.equal(MAX_LOGO_SIZE_PERCENT, 24);
+  assert.equal(MIN_LOGO_PADDING_PERCENT, 8);
+  assert.equal(MAX_LOGO_PADDING_PERCENT, 32);
 });
 
 test('embeds a centered logo and white padding in a valid SVG', async () => {
   const logo = 'data:image/png;base64,AAAA';
   const qrSvg = await QRCode.toString('Logo QR', { type: 'svg', width: 512, errorCorrectionLevel: 'H' });
-  const svgWithLogo = applyLogoToSvg(qrSvg, logo, 20);
+  const plan = createQrRenderPlan(createQrMatrix('Logo QR', 'H'), { size: 512 });
+  const geometry = createLogoGeometry(plan, { logoSize: 20 });
+  const rendererSvg = renderQrPlanToSvg(plan, '#111111', '#ffffff');
+  const svgWithLogo = applyLogoToSvg(rendererSvg, logo, geometry);
   assert.match(svgWithLogo, /data-quickqr-logo="true"/);
   assert.match(svgWithLogo, /<rect[^>]+fill="#ffffff"/);
   assert.match(svgWithLogo, /<image[^>]+href="data:image\/png;base64,AAAA"/);
   assert.match(svgWithLogo, /<\/svg>\s*$/);
-  assert.throws(() => applyLogoToSvg(qrSvg, 'data:image/svg+xml;base64,AAAA', 20), /logo image is invalid/);
+  assert.throws(
+    () => applyLogoToSvg(rendererSvg, 'data:image/svg+xml;base64,AAAA', geometry),
+    /logo image is invalid/,
+  );
+  assert.throws(() => applyLogoToSvg(qrSvg, logo, geometry), /dimensions do not match/);
 
-  const plan = createQrRenderPlan(createQrMatrix('Transparent logo', 'H'), { size: 512 });
   for (const transparentBackground of [false, true]) {
     const qrMarkup = renderQrPlanToSvg(plan, '#111111', '#ffffff', { transparentBackground });
-    const markupWithLogo = applyLogoToSvg(qrMarkup, logo, 20);
+    const markupWithLogo = applyLogoToSvg(qrMarkup, logo, geometry);
     assert.match(markupWithLogo, /<rect[^>]+fill="#ffffff"/);
     assert.match(markupWithLogo, /data-quickqr-logo="true"/);
     assert.equal(
@@ -427,6 +463,148 @@ test('embeds a centered logo and white padding in a valid SVG', async () => {
       !transparentBackground,
     );
   }
+});
+
+test('positions logos across every style, theme, and background mode with matching PNG/SVG geometry', async () => {
+  const matrix = createQrMatrix('Advanced logo positioning '.repeat(16), 'H');
+  const originalImage = globalThis.Image;
+  const originalDocument = globalThis.document;
+  const canvasCaptures = [];
+  let qrImageSize = 0;
+  globalThis.Image = class {
+    set src(value) {
+      this.naturalWidth = value === 'data:image/png;base64,LOGO' ? 128 : qrImageSize;
+      this.naturalHeight = value === 'data:image/png;base64,LOGO' ? 64 : qrImageSize;
+      queueMicrotask(() => this.onload());
+    }
+  };
+  globalThis.document = {
+    createElement() {
+      const capture = { drawCalls: [], backing: null };
+      canvasCaptures.push(capture);
+      return {
+        width: 0,
+        height: 0,
+        getContext() {
+          return {
+            _fillStyle: '',
+            get fillStyle() { return this._fillStyle; },
+            set fillStyle(value) { this._fillStyle = value; },
+            drawImage(...args) { capture.drawCalls.push(args.slice(1)); },
+            fillRect(...args) {
+              capture.backing = { fillStyle: this.fillStyle, args };
+            },
+          };
+        },
+        toDataURL() { return 'data:image/png;base64,COMPOSITED'; },
+      };
+    },
+  };
+
+  try {
+    for (const style of QR_STYLE_IDS) {
+      const plan = createQrRenderPlan(matrix, { size: 512, margin: 2, style });
+      qrImageSize = plan.outputSize;
+      for (const theme of QR_COLOR_THEMES) {
+        for (const transparentBackground of [false, true]) {
+          const svg = renderQrPlanToSvg(
+            plan,
+            theme.foreground,
+            theme.background,
+            { transparentBackground },
+          );
+          assert.equal(
+            svg.includes(`<rect width="${plan.moduleCount}" height="${plan.moduleCount}" fill="${theme.background}"/>`),
+            !transparentBackground,
+          );
+          for (const { id: logoPosition } of LOGO_POSITION_OPTIONS) {
+            const geometry = createLogoGeometry(plan, {
+              logoPosition,
+              logoSize: DEFAULT_LOGO_SIZE_PERCENT,
+              logoPadding: DEFAULT_LOGO_PADDING_PERCENT,
+            });
+            const svgWithLogo = applyLogoToSvg(svg, 'data:image/png;base64,AAAA', geometry);
+            assert.ok(svgWithLogo.includes(
+              `<rect x="${geometry.backing.x}" y="${geometry.backing.y}" width="${geometry.backing.size}" height="${geometry.backing.size}" fill="#ffffff"/>`,
+            ));
+            assert.ok(svgWithLogo.includes(
+              `<image x="${geometry.logo.x}" y="${geometry.logo.y}" width="${geometry.logo.size}" height="${geometry.logo.size}"`,
+            ));
+            const qrDataUrl = transparentBackground
+              ? 'data:image/png;base64,TRANSPARENT_QR'
+              : 'data:image/png;base64,OPAQUE_QR';
+            assert.equal(
+              await applyLogoToPng(qrDataUrl, 'data:image/png;base64,LOGO', geometry),
+              'data:image/png;base64,COMPOSITED',
+            );
+            const capture = canvasCaptures[canvasCaptures.length - 1];
+            assert.equal(capture.backing.fillStyle, '#ffffff');
+            assert.deepEqual(capture.backing.args, [
+              geometry.backing.x * geometry.scale,
+              geometry.backing.y * geometry.scale,
+              geometry.backing.size * geometry.scale,
+              geometry.backing.size * geometry.scale,
+            ]);
+            const logoBoxPixels = geometry.logo.size * geometry.scale;
+            const imageScale = Math.min(logoBoxPixels / 128, logoBoxPixels / 64);
+            const logoWidth = 128 * imageScale;
+            const logoHeight = 64 * imageScale;
+            assert.deepEqual(capture.drawCalls[1], [
+              geometry.logo.x * geometry.scale + (logoBoxPixels - logoWidth) / 2,
+              geometry.logo.y * geometry.scale + (logoBoxPixels - logoHeight) / 2,
+              logoWidth,
+              logoHeight,
+            ]);
+            assert.ok(Math.abs(
+              geometry.backing.size - geometry.logo.size - geometry.logo.size * (geometry.logoPadding / 50),
+            ) < 0.000001);
+          }
+        }
+      }
+    }
+  } finally {
+    if (originalImage === undefined) delete globalThis.Image;
+    else globalThis.Image = originalImage;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+});
+
+test('rejects logo backing that intersects QR finder patterns', () => {
+  const plan = createQrRenderPlan(createQrMatrix('QuickQR', 'H'), { size: 320, margin: 2 });
+  for (const { id: logoPosition } of LOGO_POSITION_OPTIONS) {
+    assert.throws(
+      () => createLogoGeometry(plan, {
+        logoPosition,
+        logoSize: MAX_LOGO_SIZE_PERCENT,
+        logoPadding: MAX_LOGO_PADDING_PERCENT,
+      }),
+      LogoFinderOverlapError,
+    );
+  }
+});
+
+test('validates logo settings and keeps high error correction when a logo is enabled', () => {
+  const plan = createQrRenderPlan(createQrMatrix('Logo settings validation', 'H'), { size: 512 });
+  for (const settings of [
+    { logoPosition: null },
+    { logoPosition: 'middle' },
+    { logoSize: MIN_LOGO_SIZE_PERCENT - 1 },
+    { logoSize: MAX_LOGO_SIZE_PERCENT + 1 },
+    { logoSize: null },
+    { logoSize: 18.5 },
+    { logoPadding: MIN_LOGO_PADDING_PERCENT - 1 },
+    { logoPadding: MAX_LOGO_PADDING_PERCENT + 1 },
+    { logoPadding: null },
+    { logoPadding: 16.5 },
+  ]) {
+    assert.throws(() => createLogoGeometry(plan, settings));
+  }
+
+  assert.equal(getQrErrorCorrectionLevel(true, true), 'H');
+  assert.equal(getQrErrorCorrectionLevel(false, true), 'M');
+  assert.equal(getQrErrorCorrectionLevel(true, false), 'M');
+  assert.throws(() => getQrErrorCorrectionLevel('true', true), /boolean/);
 });
 
 function memoryStorage(initialValue = null) {
@@ -481,6 +659,8 @@ test('stores, reloads, restores, deletes, and clears QR history', () => {
       qrStyle: 'square',
       transparentBackground: false,
       quietZone: MIN_QR_QUIET_ZONE_MODULES,
+      logoPosition: DEFAULT_LOGO_POSITION,
+      logoPadding: DEFAULT_LOGO_PADDING_PERCENT,
     },
   });
 
@@ -569,6 +749,9 @@ test('saves and restores background settings while defaulting legacy history ent
   const legacyRestored = getQrHistoryEntry([legacy], legacy.id);
   assert.equal(legacyRestored.settings.transparentBackground, false);
   assert.equal(legacyRestored.settings.quietZone, MIN_QR_QUIET_ZONE_MODULES);
+  assert.equal(legacyRestored.settings.logoPosition, DEFAULT_LOGO_POSITION);
+  assert.equal(legacyRestored.settings.logoSize, DEFAULT_LOGO_SIZE_PERCENT);
+  assert.equal(legacyRestored.settings.logoPadding, DEFAULT_LOGO_PADDING_PERCENT);
 
   for (const settings of [
     { transparentBackground: 'true' },
@@ -577,6 +760,55 @@ test('saves and restores background settings while defaulting legacy history ent
     { quietZone: 2.5 },
   ]) {
     const invalidEntry = sampleHistoryEntry(`invalid-${Object.keys(settings)[0]}`, {
+      settings: {
+        size: 320,
+        foreground: '#07130b',
+        background: '#ffffff',
+        ...settings,
+      },
+    });
+    assert.deepEqual(readQrHistory(memoryStorage(JSON.stringify({
+      version: 1,
+      entries: [invalidEntry],
+    }))), { entries: [], error: true });
+  }
+});
+
+test('saves and validates logo position and backing padding in history', () => {
+  const storage = memoryStorage();
+  const entry = createQrHistoryEntry({
+    type: 'text',
+    values: { ...blank, text: 'Positioned logo history' },
+    payload: 'Positioned logo history',
+    settings: {
+      size: 512,
+      foreground: '#39FF14',
+      background: '#071A12',
+      logoEnabled: true,
+      logoDataUrl: 'data:image/png;base64,AAAA',
+      logoSize: 22,
+      logoPosition: 'bottom',
+      logoPadding: 28,
+    },
+  });
+  assert.equal(writeQrHistory([entry], storage), true);
+  const restored = getQrHistoryEntry(readQrHistory(storage).entries, entry.id);
+  assert.equal(restored.settings.logoSize, 22);
+  assert.equal(restored.settings.logoPosition, 'bottom');
+  assert.equal(restored.settings.logoPadding, 28);
+
+  for (const settings of [
+    { logoPosition: null },
+    { logoPosition: 'left' },
+    { logoSize: MIN_LOGO_SIZE_PERCENT - 1 },
+    { logoSize: MAX_LOGO_SIZE_PERCENT + 1 },
+    { logoSize: null },
+    { logoPadding: MIN_LOGO_PADDING_PERCENT - 1 },
+    { logoPadding: MAX_LOGO_PADDING_PERCENT + 1 },
+    { logoPadding: null },
+    { logoPadding: 16.5 },
+  ]) {
+    const invalidEntry = sampleHistoryEntry(`invalid-logo-${Object.keys(settings)[0]}`, {
       settings: {
         size: 320,
         foreground: '#07130b',

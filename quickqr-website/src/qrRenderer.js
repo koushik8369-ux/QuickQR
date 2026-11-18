@@ -219,3 +219,10 @@ export function renderQrPlanToSvg(plan, foreground, background, options) {
 export function createQrMatrix(content, errorCorrectionLevel) {
   return QRCode.create(content, { errorCorrectionLevel });
 }
+
+export function getQrErrorCorrectionLevel(logoEnabled, hasUploadedLogo) {
+  if (typeof logoEnabled !== 'boolean' || typeof hasUploadedLogo !== 'boolean') {
+    throw new Error('Logo error-correction settings must be boolean values.');
+  }
+  return logoEnabled && hasUploadedLogo ? 'H' : 'M';
+}

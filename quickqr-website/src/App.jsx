@@ -12,7 +12,15 @@ import {
   applyLogoToPng,
   applyLogoToSvg,
   createHistoryLogoDataUrl,
+  createLogoGeometry,
+  DEFAULT_LOGO_PADDING_PERCENT,
+  DEFAULT_LOGO_POSITION,
+  DEFAULT_LOGO_SIZE_PERCENT,
+  LOGO_POSITION_OPTIONS,
+  LogoFinderOverlapError,
+  MAX_LOGO_PADDING_PERCENT,
   MAX_LOGO_SIZE_PERCENT,
+  MIN_LOGO_PADDING_PERCENT,
   MIN_LOGO_SIZE_PERCENT,
   readLogoFile,
 } from './qrLogo.js';
@@ -26,6 +34,7 @@ import {
 import {
   createQrMatrix,
   createQrRenderPlan,
+  getQrErrorCorrectionLevel,
   MAX_QR_QUIET_ZONE_MODULES,
   MIN_QR_QUIET_ZONE_MODULES,
   QR_STYLE_OPTIONS,
@@ -73,7 +82,9 @@ const INITIAL_SETTINGS = {
   qrStyle: 'square',
   logoDataUrl: '',
   logoEnabled: false,
-  logoSize: 18,
+  logoPosition: DEFAULT_LOGO_POSITION,
+  logoSize: DEFAULT_LOGO_SIZE_PERCENT,
+  logoPadding: DEFAULT_LOGO_PADDING_PERCENT,
 };
 
 const MATRIX_CHARACTERS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン<>[]{}#$%';
@@ -535,7 +546,39 @@ function QrSettings({ settings, onChange, onThemeSelect, onLogoUpload, onLogoRem
               disabled={!settings.logoEnabled}
               onChange={(event) => onChange('logoSize', Number(event.target.value))}
             />
-            <small className="field-hint">High error correction and white padding help compensate for logo overlap; test with your target scanners.</small>
+            <div className="logo-position-control">
+              <span className="logo-file-label" id="qr-logo-position-label">Logo position</span>
+              <div className="logo-position-options" role="group" aria-labelledby="qr-logo-position-label">
+                {LOGO_POSITION_OPTIONS.map((position) => (
+                  <button
+                    className="logo-position-option"
+                    type="button"
+                    key={position.id}
+                    aria-pressed={settings.logoPosition === position.id}
+                    disabled={!settings.logoEnabled}
+                    onClick={() => onChange('logoPosition', position.id)}
+                  >
+                    {position.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="logo-size-control" htmlFor="qr-logo-padding">
+              <span>Backing padding</span>
+              <span>{settings.logoPadding}%</span>
+            </label>
+            <input
+              className="logo-size-slider"
+              id="qr-logo-padding"
+              type="range"
+              min={MIN_LOGO_PADDING_PERCENT}
+              max={MAX_LOGO_PADDING_PERCENT}
+              step="1"
+              value={settings.logoPadding}
+              disabled={!settings.logoEnabled}
+              onChange={(event) => onChange('logoPadding', Number(event.target.value))}
+            />
+            <small className="field-hint">A white backing is always included. Padding is per side; small exports retain a 4 px minimum. Test scans with your target devices.</small>
           </>
         )}
       </div>
@@ -744,22 +787,23 @@ function App() {
       }
       setGenerating(true);
       try {
-        const errorCorrectionLevel = settings.logoEnabled && settings.logoDataUrl ? 'H' : 'M';
+        const logoEnabled = settings.logoEnabled && Boolean(settings.logoDataUrl);
+        const errorCorrectionLevel = getQrErrorCorrectionLevel(settings.logoEnabled, logoEnabled);
         const matrix = createQrMatrix(content, errorCorrectionLevel);
         const renderPlan = createQrRenderPlan(matrix, {
           size: settings.size,
           margin: settings.quietZone,
           style: settings.qrStyle,
         });
+        const logoGeometry = logoEnabled ? createLogoGeometry(renderPlan, settings) : null;
         const dataUrl = renderQrPlanToCanvas(
           renderPlan,
           settings.foreground,
           settings.background,
           { transparentBackground: settings.transparentBackground },
         ).toDataURL('image/png');
-        const logoEnabled = settings.logoEnabled && Boolean(settings.logoDataUrl);
         const previewDataUrl = logoEnabled
-          ? await applyLogoToPng(dataUrl, settings.logoDataUrl, settings.logoSize)
+          ? await applyLogoToPng(dataUrl, settings.logoDataUrl, logoGeometry)
           : dataUrl;
         if (active) {
           setQr(previewDataUrl);
@@ -799,7 +843,7 @@ function App() {
             { transparentBackground: settings.transparentBackground },
           );
           const svgMarkup = logoEnabled
-            ? applyLogoToSvg(plainSvg, settings.logoDataUrl, settings.logoSize)
+            ? applyLogoToSvg(plainSvg, settings.logoDataUrl, logoGeometry)
             : plainSvg;
           if (active) {
             const svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
@@ -810,7 +854,9 @@ function App() {
         }
       } catch {
         if (active) {
-          setGenerationError('This QR code could not be generated. Try shortening the content or using a different logo.');
+          setGenerationError(error instanceof LogoFinderOverlapError
+            ? error.message
+            : 'This QR code could not be generated. Try shortening the content or using a different logo.');
           if (explicitGeneration) explicitGenerationRef.current = null;
         }
       } finally {

@@ -962,6 +962,46 @@ select.form-control {
   margin-top: 2px;
 }
 
+.logo-position-control {
+  display: grid;
+  gap: 6px;
+}
+
+.logo-position-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.logo-position-option {
+  min-height: 32px;
+  border: 1px solid rgba(142, 175, 148, 0.24);
+  border-radius: 6px;
+  background: rgba(1, 7, 3, 0.56);
+  color: #aebcb1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.logo-position-option:hover:not(:disabled),
+.logo-position-option[aria-pressed="true"] {
+  border-color: rgba(57, 255, 20, 0.58);
+  background: rgba(57, 255, 20, 0.1);
+  color: #d7ffe0;
+}
+
+.logo-position-option:focus-visible {
+  outline: 2px solid #b1ffc4;
+  outline-offset: 2px;
+}
+
+.logo-position-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .logo-size-slider {
   width: 100%;
   margin: 0;

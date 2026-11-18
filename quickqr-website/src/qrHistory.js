@@ -7,6 +7,16 @@ import {
   MIN_QR_QUIET_ZONE_MODULES,
   QR_STYLE_IDS,
 } from './qrRenderer.js';
+import {
+  DEFAULT_LOGO_PADDING_PERCENT,
+  DEFAULT_LOGO_POSITION,
+  DEFAULT_LOGO_SIZE_PERCENT,
+  LOGO_POSITION_IDS,
+  MAX_LOGO_PADDING_PERCENT,
+  MIN_LOGO_PADDING_PERCENT,
+  MAX_LOGO_SIZE_PERCENT,
+  MIN_LOGO_SIZE_PERCENT,
+} from './qrLogo.js';
 
 export const QR_HISTORY_STORAGE_KEY = 'quickqr_history_v1';
 export const MAX_QR_HISTORY_ENTRIES = 20;
@@ -43,7 +53,18 @@ function isHistoryEntry(entry) {
       || LOGO_DATA_URL_PATTERN.test(entry.settings.logoDataUrl))
     && (entry.settings.logoEnabled === undefined || typeof entry.settings.logoEnabled === 'boolean')
     && (entry.settings.logoSize === undefined
-      || (Number.isInteger(entry.settings.logoSize) && entry.settings.logoSize >= 12 && entry.settings.logoSize <= 24))
+      || (
+        Number.isInteger(entry.settings.logoSize)
+        && entry.settings.logoSize >= MIN_LOGO_SIZE_PERCENT
+        && entry.settings.logoSize <= MAX_LOGO_SIZE_PERCENT
+      ))
+    && (entry.settings.logoPosition === undefined || LOGO_POSITION_IDS.includes(entry.settings.logoPosition))
+    && (entry.settings.logoPadding === undefined
+      || (
+        Number.isInteger(entry.settings.logoPadding)
+        && entry.settings.logoPadding >= MIN_LOGO_PADDING_PERCENT
+        && entry.settings.logoPadding <= MAX_LOGO_PADDING_PERCENT
+      ))
     && (entry.settings.qrStyle === undefined || QR_STYLE_IDS.includes(entry.settings.qrStyle))
     && (entry.settings.transparentBackground === undefined
       || typeof entry.settings.transparentBackground === 'boolean')
@@ -129,6 +150,9 @@ export function getQrHistoryEntry(entries, id) {
       qrStyle: entry.settings.qrStyle ?? 'square',
       transparentBackground: entry.settings.transparentBackground ?? false,
       quietZone: entry.settings.quietZone ?? MIN_QR_QUIET_ZONE_MODULES,
+      logoSize: entry.settings.logoSize ?? DEFAULT_LOGO_SIZE_PERCENT,
+      logoPosition: entry.settings.logoPosition ?? DEFAULT_LOGO_POSITION,
+      logoPadding: entry.settings.logoPadding ?? DEFAULT_LOGO_PADDING_PERCENT,
     },
   } : null;
 }
