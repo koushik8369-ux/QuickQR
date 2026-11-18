@@ -8,6 +8,8 @@ export const QR_STYLE_OPTIONS = [
 ];
 
 export const QR_STYLE_IDS = QR_STYLE_OPTIONS.map(({ id }) => id);
+export const MIN_QR_QUIET_ZONE_MODULES = 2;
+export const MAX_QR_QUIET_ZONE_MODULES = 8;
 
 const QR_STYLE_GEOMETRY = {
   square: { shape: 'square', inset: 0 },
@@ -21,7 +23,13 @@ const HEX_COLOR_PATTERN = /^#[\da-f]{6}$/i;
 export function createQrRenderPlan(qrCode, { size, margin = 2, style = 'square' }) {
   if (!QR_STYLE_IDS.includes(style)) throw new Error('Choose a supported QR style.');
   if (!Number.isInteger(size) || size < 1) throw new Error('QR size must be a positive integer.');
-  if (!Number.isInteger(margin) || margin < 0) throw new Error('QR margin must be a non-negative integer.');
+  if (
+    !Number.isInteger(margin)
+    || margin < MIN_QR_QUIET_ZONE_MODULES
+    || margin > MAX_QR_QUIET_ZONE_MODULES
+  ) {
+    throw new Error(`QR quiet zone must be an integer between ${MIN_QR_QUIET_ZONE_MODULES} and ${MAX_QR_QUIET_ZONE_MODULES} modules.`);
+  }
 
   const modules = qrCode?.modules;
   if (
@@ -80,6 +88,18 @@ function assertHexColor(color) {
   if (!HEX_COLOR_PATTERN.test(color)) throw new Error('QR colours must be six-digit hexadecimal values.');
 }
 
+function getTransparentBackground(options) {
+  if (options === undefined) return false;
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new Error('QR transparency settings are invalid.');
+  }
+  const { transparentBackground = false } = options;
+  if (typeof transparentBackground !== 'boolean') {
+    throw new Error('QR transparent background setting must be a boolean.');
+  }
+  return transparentBackground;
+}
+
 function drawRoundedModule(context, module) {
   const x = module.x + module.inset;
   const y = module.y + module.inset;
@@ -119,11 +139,13 @@ function drawChamferedModule(context, module) {
   context.fill();
 }
 
-export function drawQrPlanToCanvas(context, plan, foreground, background) {
+export function drawQrPlanToCanvas(context, plan, foreground, background, options) {
   assertHexColor(foreground);
   assertHexColor(background);
-  context.fillStyle = background;
-  context.fillRect(0, 0, plan.outputSize, plan.outputSize);
+  if (!getTransparentBackground(options)) {
+    context.fillStyle = background;
+    context.fillRect(0, 0, plan.outputSize, plan.outputSize);
+  }
   context.save();
   context.scale(plan.scale, plan.scale);
   context.fillStyle = foreground;
@@ -145,13 +167,13 @@ export function drawQrPlanToCanvas(context, plan, foreground, background) {
   context.restore();
 }
 
-export function renderQrPlanToCanvas(plan, foreground, background) {
+export function renderQrPlanToCanvas(plan, foreground, background, options) {
   const canvas = document.createElement('canvas');
   canvas.width = plan.outputSize;
   canvas.height = plan.outputSize;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('The QR preview could not be drawn.');
-  drawQrPlanToCanvas(context, plan, foreground, background);
+  drawQrPlanToCanvas(context, plan, foreground, background, options);
   return canvas;
 }
 
@@ -183,11 +205,15 @@ function moduleSvg(module, foreground) {
   return `<rect x="${module.x}" y="${module.y}" width="1" height="1" fill="${foreground}"/>`;
 }
 
-export function renderQrPlanToSvg(plan, foreground, background) {
+export function renderQrPlanToSvg(plan, foreground, background, options) {
   assertHexColor(foreground);
   assertHexColor(background);
+  const transparentBackground = getTransparentBackground(options);
   const modules = plan.darkModules.map((module) => moduleSvg(module, foreground)).join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${plan.outputSize}" height="${plan.outputSize}" viewBox="0 0 ${plan.moduleCount} ${plan.moduleCount}" shape-rendering="geometricPrecision"><rect width="${plan.moduleCount}" height="${plan.moduleCount}" fill="${background}"/>${modules}</svg>`;
+  const backgroundRect = transparentBackground
+    ? ''
+    : `<rect width="${plan.moduleCount}" height="${plan.moduleCount}" fill="${background}"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${plan.outputSize}" height="${plan.outputSize}" viewBox="0 0 ${plan.moduleCount} ${plan.moduleCount}" shape-rendering="geometricPrecision">${backgroundRect}${modules}</svg>`;
 }
 
 export function createQrMatrix(content, errorCorrectionLevel) {

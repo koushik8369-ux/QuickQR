@@ -26,6 +26,8 @@ import {
 import {
   createQrMatrix,
   createQrRenderPlan,
+  MAX_QR_QUIET_ZONE_MODULES,
+  MIN_QR_QUIET_ZONE_MODULES,
   QR_STYLE_OPTIONS,
   renderQrPlanToCanvas,
   renderQrPlanToSvg,
@@ -66,6 +68,8 @@ const INITIAL_SETTINGS = {
   colorTheme: 'matrix',
   foreground: '#39FF14',
   background: '#071A12',
+  transparentBackground: false,
+  quietZone: MIN_QR_QUIET_ZONE_MODULES,
   qrStyle: 'square',
   logoDataUrl: '',
   logoEnabled: false,
@@ -366,7 +370,38 @@ function QrSettings({ settings, onChange, onThemeSelect, onLogoUpload, onLogoRem
           <small className="field-hint">Dense codes may export larger to keep modules at least 2 px wide.</small>
         </div>
         <ColorPicker id="qr-foreground" label="QR color" value={settings.foreground} onChange={(value) => onChange('foreground', value)} />
-        <ColorPicker id="qr-background" label="Background" value={settings.background} onChange={(value) => onChange('background', value)} />
+        <ColorPicker id="qr-background" label="Background color" value={settings.background} onChange={(value) => onChange('background', value)} />
+      </div>
+      <div className="background-options reveal">
+        <label className="checkbox-field" htmlFor="qr-transparent-background">
+          <input
+            id="qr-transparent-background"
+            type="checkbox"
+            checked={settings.transparentBackground}
+            onChange={(event) => onChange('transparentBackground', event.target.checked)}
+          />
+          <span className="custom-checkbox" aria-hidden="true" />
+          <span>Transparent background</span>
+        </label>
+        <div className="quiet-zone-field">
+          <label className="quiet-zone-control" htmlFor="qr-quiet-zone">
+            <span>Quiet zone</span>
+            <span>{settings.quietZone} modules</span>
+          </label>
+          <input
+            className="quiet-zone-slider"
+            id="qr-quiet-zone"
+            type="range"
+            min={MIN_QR_QUIET_ZONE_MODULES}
+            max={MAX_QR_QUIET_ZONE_MODULES}
+            step="1"
+            value={settings.quietZone}
+            onChange={(event) => onChange('quietZone', Number(event.target.value))}
+          />
+        </div>
+        <small className="field-hint background-guidance">
+          The selected background color is used when transparency is off. Transparent QR codes depend on the surface they are placed on for contrast.
+        </small>
       </div>
       <div className="qr-style-picker reveal" aria-labelledby="qr-style-title">
         <div className="theme-picker-heading">
@@ -520,7 +555,7 @@ function ColorPicker({ id, label, value, onChange }) {
   );
 }
 
-function PreviewCard({ qr, svgUrl, error, svgError, onClear }) {
+function PreviewCard({ qr, svgUrl, error, svgError, transparentBackground, onClear }) {
   return (
     <section className="preview-card reveal" aria-labelledby="preview-title">
       <div className="preview-heading reveal">
@@ -532,7 +567,7 @@ function PreviewCard({ qr, svgUrl, error, svgError, onClear }) {
           <span className="status-dot" />{qr ? 'Preview ready' : 'Live preview'}
         </span>
       </div>
-      <div className={`qr-stage reveal${qr ? ' has-qr' : ''}`}>
+      <div className={`qr-stage reveal${qr ? ' has-qr' : ''}${qr && transparentBackground ? ' is-transparent' : ''}`}>
         {qr ? (
           <img key={qr} className="qr-image reveal" src={qr} alt="Generated QR code preview" />
         ) : (
@@ -548,7 +583,10 @@ function PreviewCard({ qr, svgUrl, error, svgError, onClear }) {
       </div>
       <div className="preview-caption reveal">
         <span className="caption-icon" aria-hidden="true">⌁</span>
-        <span>Generated privately in your browser. Your data never leaves this device.</span>
+        <span>
+          {transparentBackground && qr ? 'Transparent preview shown on a checkerboard. ' : ''}
+          Generated privately in your browser. Your data never leaves this device.
+        </span>
       </div>
       {error && <p className="generation-error" role="alert">{error}</p>}
       {svgError && <p className="generation-error" role="alert">{svgError}</p>}
@@ -710,13 +748,14 @@ function App() {
         const matrix = createQrMatrix(content, errorCorrectionLevel);
         const renderPlan = createQrRenderPlan(matrix, {
           size: settings.size,
-          margin: 2,
+          margin: settings.quietZone,
           style: settings.qrStyle,
         });
         const dataUrl = renderQrPlanToCanvas(
           renderPlan,
           settings.foreground,
           settings.background,
+          { transparentBackground: settings.transparentBackground },
         ).toDataURL('image/png');
         const logoEnabled = settings.logoEnabled && Boolean(settings.logoDataUrl);
         const previewDataUrl = logoEnabled
@@ -757,6 +796,7 @@ function App() {
             renderPlan,
             settings.foreground,
             settings.background,
+            { transparentBackground: settings.transparentBackground },
           );
           const svgMarkup = logoEnabled
             ? applyLogoToSvg(plainSvg, settings.logoDataUrl, settings.logoSize)
@@ -927,6 +967,7 @@ function App() {
               svgUrl={svgUrl}
               error={generationError}
               svgError={svgError}
+              transparentBackground={settings.transparentBackground}
               onClear={handleClear}
             />
           </section>

@@ -2,7 +2,11 @@ import {
   getQrColorThemeId,
   isQrColorThemeCompatible,
 } from './qrThemes.js';
-import { QR_STYLE_IDS } from './qrRenderer.js';
+import {
+  MAX_QR_QUIET_ZONE_MODULES,
+  MIN_QR_QUIET_ZONE_MODULES,
+  QR_STYLE_IDS,
+} from './qrRenderer.js';
 
 export const QR_HISTORY_STORAGE_KEY = 'quickqr_history_v1';
 export const MAX_QR_HISTORY_ENTRIES = 20;
@@ -41,6 +45,14 @@ function isHistoryEntry(entry) {
     && (entry.settings.logoSize === undefined
       || (Number.isInteger(entry.settings.logoSize) && entry.settings.logoSize >= 12 && entry.settings.logoSize <= 24))
     && (entry.settings.qrStyle === undefined || QR_STYLE_IDS.includes(entry.settings.qrStyle))
+    && (entry.settings.transparentBackground === undefined
+      || typeof entry.settings.transparentBackground === 'boolean')
+    && (entry.settings.quietZone === undefined
+      || (
+        Number.isInteger(entry.settings.quietZone)
+        && entry.settings.quietZone >= MIN_QR_QUIET_ZONE_MODULES
+        && entry.settings.quietZone <= MAX_QR_QUIET_ZONE_MODULES
+      ))
     && typeof entry.createdAt === 'string'
     && Number.isFinite(Date.parse(entry.createdAt)),
   );
@@ -115,6 +127,8 @@ export function getQrHistoryEntry(entries, id) {
       ...entry.settings,
       colorTheme: getQrColorThemeId(entry.settings),
       qrStyle: entry.settings.qrStyle ?? 'square',
+      transparentBackground: entry.settings.transparentBackground ?? false,
+      quietZone: entry.settings.quietZone ?? MIN_QR_QUIET_ZONE_MODULES,
     },
   } : null;
 }

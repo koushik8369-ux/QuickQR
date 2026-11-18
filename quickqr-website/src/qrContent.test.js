@@ -32,6 +32,8 @@ import {
   createQrMatrix,
   createQrRenderPlan,
   drawQrPlanToCanvas,
+  MAX_QR_QUIET_ZONE_MODULES,
+  MIN_QR_QUIET_ZONE_MODULES,
   QR_STYLE_IDS,
   renderQrPlanToSvg,
 } from './qrRenderer.js';
@@ -195,13 +197,40 @@ test('preserves finder-pattern geometry and guards the reserved-module API', () 
   );
 });
 
+test('validates quiet-zone bounds and includes the selected margin in render geometry', () => {
+  const matrix = createQrMatrix('Quiet zone geometry', 'M');
+  for (const quietZone of [MIN_QR_QUIET_ZONE_MODULES, 5, MAX_QR_QUIET_ZONE_MODULES]) {
+    const plan = createQrRenderPlan(matrix, { size: 320, margin: quietZone });
+    assert.equal(plan.margin, quietZone);
+    assert.equal(plan.moduleCount, matrix.modules.size + quietZone * 2);
+    assert.ok(plan.darkModules.every(({ x, y }) => (
+      x >= quietZone
+      && y >= quietZone
+      && x < matrix.modules.size + quietZone
+      && y < matrix.modules.size + quietZone
+    )));
+  }
+
+  for (const quietZone of [MIN_QR_QUIET_ZONE_MODULES - 1, MAX_QR_QUIET_ZONE_MODULES + 1, 2.5]) {
+    assert.throws(
+      () => createQrRenderPlan(matrix, { size: 320, margin: quietZone }),
+      /quiet zone must be an integer/,
+    );
+  }
+});
+
 test('keeps canvas drawing operations consistent with SVG module geometry for every theme', () => {
   for (const theme of QR_COLOR_THEMES) {
     const matrix = createQrMatrix('Canvas and SVG style parity', 'H');
     for (const style of QR_STYLE_IDS) {
       const plan = createQrRenderPlan(matrix, { size: 512, margin: 2, style });
-      const operations = { rectangles: [], circles: 0, lineSegments: 0, roundedSegments: 0 };
-      const context = {
+      const createOperations = () => ({
+        rectangles: [],
+        circles: 0,
+        lineSegments: 0,
+        roundedSegments: 0,
+      });
+      const createContext = (operations) => ({
         fillStyle: '',
         fillRect(...args) { operations.rectangles.push(args); },
         save() {},
@@ -214,23 +243,70 @@ test('keeps canvas drawing operations consistent with SVG module geometry for ev
         closePath() {},
         arc() { operations.circles += 1; },
         fill() {},
-      };
-      drawQrPlanToCanvas(context, plan, theme.foreground, theme.background);
+      });
+      const opaqueOperations = createOperations();
+      const transparentOperations = createOperations();
+      drawQrPlanToCanvas(createContext(opaqueOperations), plan, theme.foreground, theme.background);
+      drawQrPlanToCanvas(
+        createContext(transparentOperations),
+        plan,
+        theme.foreground,
+        theme.background,
+        { transparentBackground: true },
+      );
       const svg = renderQrPlanToSvg(plan, theme.foreground, theme.background);
+      const transparentSvg = renderQrPlanToSvg(
+        plan,
+        theme.foreground,
+        theme.background,
+        { transparentBackground: true },
+      );
       const squareCount = plan.darkModules.filter(({ shape }) => shape === 'square').length;
       const roundedCount = plan.darkModules.filter(({ shape }) => shape === 'rounded').length;
       const circleCount = plan.darkModules.filter(({ shape }) => shape === 'circle').length;
       const chamferedCount = plan.darkModules.filter(({ shape }) => shape === 'chamfered').length;
 
-      assert.equal(operations.rectangles.length, squareCount + 1);
-      assert.equal(operations.roundedSegments, roundedCount * 4);
-      assert.equal(operations.lineSegments, roundedCount * 4 + chamferedCount * 7);
-      assert.equal(operations.circles, circleCount);
+      assert.equal(opaqueOperations.rectangles.length, squareCount + 1);
+      assert.equal(transparentOperations.rectangles.length, squareCount);
+      assert.equal(opaqueOperations.roundedSegments, roundedCount * 4);
+      assert.equal(transparentOperations.roundedSegments, roundedCount * 4);
+      assert.equal(opaqueOperations.lineSegments, roundedCount * 4 + chamferedCount * 7);
+      assert.equal(transparentOperations.lineSegments, roundedCount * 4 + chamferedCount * 7);
+      assert.equal(opaqueOperations.circles, circleCount);
+      assert.equal(transparentOperations.circles, circleCount);
       assert.equal((svg.match(/<polygon /g) ?? []).length, chamferedCount);
+      assert.equal((transparentSvg.match(/<polygon /g) ?? []).length, chamferedCount);
       assert.ok(svg.includes(`fill="${theme.foreground}"`));
       assert.ok(svg.includes(`fill="${theme.background}"`));
+      assert.ok(svg.includes(`<rect width="${plan.moduleCount}" height="${plan.moduleCount}" fill="${theme.background}"/>`));
+      assert.ok(!transparentSvg.includes(`<rect width="${plan.moduleCount}" height="${plan.moduleCount}" fill="${theme.background}"/>`));
     }
   }
+});
+
+test('rejects invalid transparent-background renderer options', () => {
+  const plan = createQrRenderPlan(createQrMatrix('Invalid transparency', 'M'), { size: 320 });
+  const context = {
+    fillRect() {},
+    save() {},
+    scale() {},
+    restore() {},
+    beginPath() {},
+    moveTo() {},
+    lineTo() {},
+    quadraticCurveTo() {},
+    closePath() {},
+    arc() {},
+    fill() {},
+  };
+  assert.throws(
+    () => drawQrPlanToCanvas(context, plan, '#111111', '#ffffff', { transparentBackground: 'yes' }),
+    /must be a boolean/,
+  );
+  assert.throws(
+    () => renderQrPlanToSvg(plan, '#111111', '#ffffff', { transparentBackground: 1 }),
+    /must be a boolean/,
+  );
 });
 
 test('applies the existing PNG logo composition to a custom-rendered image', async () => {
@@ -256,9 +332,12 @@ test('applies the existing PNG logo composition to a custom-rendered image', asy
         height: 0,
         getContext() {
           return {
+            fillStyle: '',
             drawImage() { drawCount += 1; },
-            fillRect() { backingCount += 1; },
-            set fillStyle(value) {},
+            fillRect() {
+              assert.equal(this.fillStyle, '#ffffff');
+              backingCount += 1;
+            },
           };
         },
         toDataURL() { return 'data:image/png;base64,COMPLETE'; },
@@ -267,14 +346,15 @@ test('applies the existing PNG logo composition to a custom-rendered image', asy
   };
 
   try {
-    const result = await applyLogoToPng(
-      'data:image/png;base64,QR',
-      'data:image/png;base64,LOGO',
-      18,
-    );
-    assert.equal(result, 'data:image/png;base64,COMPLETE');
-    assert.equal(drawCount, 2);
-    assert.equal(backingCount, 1);
+    for (const qrDataUrl of [
+      'data:image/png;base64,OPAQUE_QR',
+      'data:image/png;base64,TRANSPARENT_QR',
+    ]) {
+      const result = await applyLogoToPng(qrDataUrl, 'data:image/png;base64,LOGO', 18);
+      assert.equal(result, 'data:image/png;base64,COMPLETE');
+    }
+    assert.equal(drawCount, 4);
+    assert.equal(backingCount, 2);
   } finally {
     if (originalImage === undefined) delete globalThis.Image;
     else globalThis.Image = originalImage;
@@ -295,10 +375,11 @@ test('selects all requested themes and marks manual colour changes as Custom', (
     { name: 'Emerald', foreground: '#A7FFE4', background: '#07352D' },
   ]);
   for (const theme of QR_COLOR_THEMES) {
-    const selected = applyQrColorTheme({}, theme.id);
+    const selected = applyQrColorTheme({ transparentBackground: true }, theme.id);
     assert.equal(selected.colorTheme, theme.id);
     assert.equal(selected.foreground, theme.foreground);
     assert.equal(selected.background, theme.background);
+    assert.equal(selected.transparentBackground, false);
     assert.equal(hasScannableQrContrast(theme.foreground, theme.background), true);
   }
 
@@ -334,6 +415,18 @@ test('embeds a centered logo and white padding in a valid SVG', async () => {
   assert.match(svgWithLogo, /<image[^>]+href="data:image\/png;base64,AAAA"/);
   assert.match(svgWithLogo, /<\/svg>\s*$/);
   assert.throws(() => applyLogoToSvg(qrSvg, 'data:image/svg+xml;base64,AAAA', 20), /logo image is invalid/);
+
+  const plan = createQrRenderPlan(createQrMatrix('Transparent logo', 'H'), { size: 512 });
+  for (const transparentBackground of [false, true]) {
+    const qrMarkup = renderQrPlanToSvg(plan, '#111111', '#ffffff', { transparentBackground });
+    const markupWithLogo = applyLogoToSvg(qrMarkup, logo, 20);
+    assert.match(markupWithLogo, /<rect[^>]+fill="#ffffff"/);
+    assert.match(markupWithLogo, /data-quickqr-logo="true"/);
+    assert.equal(
+      qrMarkup.includes(`<rect width="${plan.moduleCount}" height="${plan.moduleCount}" fill="#ffffff"/>`),
+      !transparentBackground,
+    );
+  }
 });
 
 function memoryStorage(initialValue = null) {
@@ -382,7 +475,13 @@ test('stores, reloads, restores, deletes, and clears QR history', () => {
   assert.deepEqual(reloaded.entries, [second, first]);
   assert.deepEqual(getQrHistoryEntry(reloaded.entries, 'first'), {
     ...first,
-    settings: { ...first.settings, colorTheme: 'custom', qrStyle: 'square' },
+    settings: {
+      ...first.settings,
+      colorTheme: 'custom',
+      qrStyle: 'square',
+      transparentBackground: false,
+      quietZone: MIN_QR_QUIET_ZONE_MODULES,
+    },
   });
 
   const afterDelete = removeQrHistoryEntry(reloaded.entries, 'second');
@@ -445,6 +544,51 @@ test('saves, validates, restores QR styles, and defaults legacy entries to Squar
     version: 1,
     entries: [unsupportedStyle],
   }))), { entries: [], error: true });
+});
+
+test('saves and restores background settings while defaulting legacy history entries', () => {
+  const storage = memoryStorage();
+  const customized = createQrHistoryEntry({
+    type: 'text',
+    values: { ...blank, text: 'Transparent history' },
+    payload: 'Transparent history',
+    settings: {
+      size: 512,
+      foreground: '#39FF14',
+      background: '#071A12',
+      transparentBackground: true,
+      quietZone: 7,
+    },
+  });
+  assert.equal(writeQrHistory([customized], storage), true);
+  const restored = getQrHistoryEntry(readQrHistory(storage).entries, customized.id);
+  assert.equal(restored.settings.transparentBackground, true);
+  assert.equal(restored.settings.quietZone, 7);
+
+  const legacy = sampleHistoryEntry('legacy-background');
+  const legacyRestored = getQrHistoryEntry([legacy], legacy.id);
+  assert.equal(legacyRestored.settings.transparentBackground, false);
+  assert.equal(legacyRestored.settings.quietZone, MIN_QR_QUIET_ZONE_MODULES);
+
+  for (const settings of [
+    { transparentBackground: 'true' },
+    { quietZone: MIN_QR_QUIET_ZONE_MODULES - 1 },
+    { quietZone: MAX_QR_QUIET_ZONE_MODULES + 1 },
+    { quietZone: 2.5 },
+  ]) {
+    const invalidEntry = sampleHistoryEntry(`invalid-${Object.keys(settings)[0]}`, {
+      settings: {
+        size: 320,
+        foreground: '#07130b',
+        background: '#ffffff',
+        ...settings,
+      },
+    });
+    assert.deepEqual(readQrHistory(memoryStorage(JSON.stringify({
+      version: 1,
+      entries: [invalidEntry],
+    }))), { entries: [], error: true });
+  }
 });
 
 test('keeps only the latest 20 entries and excludes Wi-Fi entries and credentials', () => {

@@ -47,6 +47,7 @@ export function applyQrColorTheme(settings, themeId) {
       colorTheme: theme.id,
       foreground: theme.foreground,
       background: theme.background,
+      transparentBackground: false,
     }
     : settings;
 }
